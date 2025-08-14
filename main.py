@@ -66,14 +66,37 @@ class SurvivalCurveExtractor:
         # Currently selected point for editing
         self.selected_point_key = None
         
+        # Navigation system for dataset
+        self.dataset_path = None
+        self.image_files = []
+        self.filtered_image_files = None  # For filtering incomplete images
+        self.current_index = 0
+        self.metadata_cache = {}
+        self.metadata_groups = []  # Store metadata groups for fallback
+        self.auto_save_enabled = True
+        self.ui_refreshing = False  # Flag to prevent auto-population during UI refresh
+        
         # UI setup
         self.setup_ui()
         
+        # Initialize description
+        self.update_image_description("Select a dataset to begin image annotation.")
+        
+        # Initially hide scrollbars
+        self.root.after(100, self.hide_initial_scrollbars)
+        
     def setup_ui(self):
         """Setup the user interface"""
+        # Main container
+        container = ttk.Frame(self.root)
+        container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Navigation bar at the top
+        self.setup_navigation_bar(container)
+        
         # Main frame with paned window for resizable columns
-        main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        main_frame = ttk.Frame(container)
+        main_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
         
         # Create horizontal paned window (resizable columns)
         paned_window = tk.PanedWindow(main_frame, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, sashwidth=5)
@@ -115,43 +138,281 @@ class SurvivalCurveExtractor:
         paned_window.add(self.image_frame, minsize=400)
         
         # Setup control sections
-        self.setup_image_controls(control_panel)
         self.setup_calibration_controls(control_panel)
         self.setup_groups_controls(control_panel)
         self.setup_extraction_controls(control_panel)
         self.setup_export_controls(control_panel)
         
-        # Setup image canvas
-        self.canvas = tk.Canvas(self.image_frame, bg='white')
-        self.canvas.pack(fill=tk.BOTH, expand=True)
+        # Create image display area with description
+        image_container = ttk.Frame(self.image_frame)
+        image_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Create main canvas area with grid layout for scrollbars
+        canvas_area = ttk.Frame(image_container)
+        canvas_area.pack(fill=tk.BOTH, expand=True)
+        
+        # Configure grid weights
+        canvas_area.grid_rowconfigure(0, weight=1)
+        canvas_area.grid_columnconfigure(0, weight=1)
+        
+        # Setup image canvas in grid position (0,0)
+        self.canvas = tk.Canvas(canvas_area, bg='white')
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        
+        # Create scrollbars in grid positions
+        self.v_scrollbar = ttk.Scrollbar(canvas_area, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.h_scrollbar = ttk.Scrollbar(canvas_area, orient=tk.HORIZONTAL, command=self.canvas.xview)
+        
+        # Configure canvas to use scrollbars
+        self.canvas.configure(yscrollcommand=self.v_scrollbar.set)
+        self.canvas.configure(xscrollcommand=self.h_scrollbar.set)
+        
+        # Setup zoom and pan controls in top-right
+        self.setup_zoom_pan_controls(canvas_area)
         self.canvas.bind('<Button-1>', self.on_canvas_click)
         self.canvas.bind('<Motion>', self.on_canvas_motion)
         self.canvas.bind('<B1-Motion>', self.on_canvas_drag)
         self.canvas.bind('<ButtonRelease-1>', self.on_canvas_release)
         
-        # Scrollbars for canvas
-        v_scrollbar = ttk.Scrollbar(self.image_frame, orient=tk.VERTICAL, command=self.canvas.yview)
-        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.canvas.configure(yscrollcommand=v_scrollbar.set)
+        # Add mouse wheel zoom
+        self.canvas.bind('<MouseWheel>', self.on_mouse_wheel)
+        self.canvas.bind('<Button-4>', self.on_mouse_wheel)  # Linux
+        self.canvas.bind('<Button-5>', self.on_mouse_wheel)  # Linux
         
-        h_scrollbar = ttk.Scrollbar(self.image_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
-        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
-        self.canvas.configure(xscrollcommand=h_scrollbar.set)
+        # Handle canvas resize to update scrollbars
+        self.canvas.bind('<Configure>', self.on_canvas_configure)
         
-    def setup_image_controls(self, parent):
-        """Setup image loading controls"""
-        frame = ttk.LabelFrame(parent, text="1. Load Image", padding=5)
-        frame.pack(fill=tk.X, pady=(0, 10))
+        # Image description panel at the bottom
+        self.setup_description_panel(self.image_frame)
         
-        ttk.Button(frame, text="Select Image File", command=self.load_image).pack(fill=tk.X, pady=2)
-        ttk.Button(frame, text="Browse Folder", command=self.browse_folder).pack(fill=tk.X, pady=2)
+    def setup_navigation_bar(self, parent):
+        """Setup navigation bar for dataset browsing"""
+        nav_frame = ttk.Frame(parent)
+        nav_frame.pack(fill=tk.X, pady=(0, 5))
         
-        self.image_label = ttk.Label(frame, text="No image loaded", foreground="gray")
-        self.image_label.pack(fill=tk.X, pady=5)
+        # Dataset path selection
+        dataset_frame = ttk.Frame(nav_frame)
+        dataset_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        ttk.Label(dataset_frame, text="Dataset:").pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(dataset_frame, text="Select Dataset Folder", command=self.select_dataset).pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.dataset_label = ttk.Label(dataset_frame, text="No dataset selected", foreground="gray")
+        self.dataset_label.pack(side=tk.LEFT, padx=(0, 20))
+        
+        # Navigation controls
+        nav_controls = ttk.Frame(nav_frame)
+        nav_controls.pack(side=tk.RIGHT)
+        
+        # Progress and filter controls
+        progress_frame = ttk.Frame(nav_controls)
+        progress_frame.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.progress_label = ttk.Label(progress_frame, text="Progress: 0/0 (0%)")
+        self.progress_label.pack(side=tk.TOP)
+        
+        # Only incomplete checkbox
+        self.only_incomplete_var = tk.BooleanVar()
+        self.only_incomplete_check = ttk.Checkbutton(
+            progress_frame, text="Only incomplete", 
+            variable=self.only_incomplete_var,
+            command=self.apply_incomplete_filter
+        )
+        self.only_incomplete_check.pack(side=tk.TOP)
+        
+        # Navigation buttons
+        nav_buttons = ttk.Frame(nav_controls)
+        nav_buttons.pack(side=tk.LEFT, padx=(10, 0))
+        
+        self.prev_btn = ttk.Button(nav_buttons, text="◀ Previous", command=self.prev_image, state=tk.DISABLED)
+        self.prev_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.image_counter_label = ttk.Label(nav_buttons, text="0 of 0 ○")
+        self.image_counter_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.next_btn = ttk.Button(nav_buttons, text="Next ▶", command=self.next_image, state=tk.DISABLED)
+        self.next_btn.pack(side=tk.LEFT)
+        
+        # Current file display
+        self.current_file_label = ttk.Label(nav_frame, text="", foreground="gold")
+        self.current_file_label.pack(side=tk.LEFT, padx=(20, 0))
+        
+    def setup_description_panel(self, parent):
+        """Setup image description panel"""
+        desc_frame = ttk.LabelFrame(parent, text="Image Description", padding=5)
+        desc_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(5, 0))
+        
+        # Create scrollable text widget for description
+        desc_container = ttk.Frame(desc_frame)
+        desc_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Text widget with scrollbar
+        self.description_text = tk.Text(desc_container, height=5, wrap=tk.WORD, 
+                                       bg='#f8f8f8', fg='#333333', font=('Arial', 11),
+                                       state=tk.DISABLED)
+        self.description_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        desc_scrollbar = ttk.Scrollbar(desc_container, orient=tk.VERTICAL, 
+                                      command=self.description_text.yview)
+        desc_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.description_text.configure(yscrollcommand=desc_scrollbar.set)
+    
+    def setup_zoom_pan_controls(self, parent):
+        """Setup zoom and pan controls in top-right corner"""
+        # Create zoom panel frame positioned absolutely in top-right
+        self.zoom_panel = ttk.Frame(parent, relief='raised', borderwidth=2)
+        self.zoom_panel.place(x=10, y=10, anchor='nw')
+        
+        # Panel visibility toggle
+        self.zoom_panel_visible = tk.BooleanVar(value=True)
+        
+        # Title bar for dragging
+        title_frame = ttk.Frame(self.zoom_panel)
+        title_frame.pack(fill=tk.X, padx=2, pady=2)
+        
+        title_label = ttk.Label(title_frame, text="🔍 Zoom Controls", font=('Arial', 8, 'bold'))
+        title_label.pack(side=tk.LEFT)
+        
+        # Drag handle indicator
+        drag_label = ttk.Label(title_frame, text="⋮⋮", font=('Arial', 6))
+        drag_label.pack(side=tk.RIGHT)
+        
+        # Control buttons frame
+        control_frame = ttk.Frame(self.zoom_panel)
+        control_frame.pack(padx=5, pady=(0, 5))
+        
+        # Toggle zoom panel button
+        toggle_btn = ttk.Button(control_frame, text="👁", width=3,
+                               command=self.toggle_zoom_panel)
+        toggle_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Zoom controls
+        zoom_frame = ttk.Frame(control_frame)
+        zoom_frame.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(zoom_frame, text="Zoom:", font=('Arial', 8)).pack(side=tk.LEFT)
+        
+        zoom_out_btn = ttk.Button(zoom_frame, text="−", width=3,
+                                 command=self.zoom_out)
+        zoom_out_btn.pack(side=tk.LEFT, padx=1)
+        
+        self.zoom_label = ttk.Label(zoom_frame, text="100%", font=('Arial', 8), width=5)
+        self.zoom_label.pack(side=tk.LEFT, padx=2)
+        
+        zoom_in_btn = ttk.Button(zoom_frame, text="+", width=3,
+                                command=self.zoom_in)
+        zoom_in_btn.pack(side=tk.LEFT, padx=1)
+        
+        # Reset zoom button
+        reset_btn = ttk.Button(control_frame, text="⌂", width=3,
+                              command=self.reset_zoom)
+        reset_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Initialize zoom variables
+        self.zoom_level = 1.0
+        
+        # Make zoom panel draggable
+        self.root.after(100, self.setup_draggable_panel)  # Delay to ensure widgets are created
+    
+    def setup_draggable_panel(self):
+        """Make the zoom panel draggable"""
+        self.zoom_panel_drag_data = {"x": 0, "y": 0, "dragging": False}
+        
+        # Bind drag events to the zoom panel and its children
+        self.bind_drag_events(self.zoom_panel)
+        
+        # Also bind to child widgets for better UX
+        for child in self.zoom_panel.winfo_children():
+            self.bind_drag_events_recursive(child)
+    
+    def bind_drag_events(self, widget):
+        """Bind drag events to a widget"""
+        widget.bind('<Button-1>', self.start_drag_zoom_panel)
+        widget.bind('<B1-Motion>', self.on_drag_zoom_panel)
+        widget.bind('<ButtonRelease-1>', self.stop_drag_zoom_panel)
+        
+        # Add cursor change for draggable areas
+        widget.bind('<Enter>', lambda e: widget.configure(cursor='hand2'))
+        widget.bind('<Leave>', lambda e: widget.configure(cursor=''))
+    
+    def bind_drag_events_recursive(self, widget):
+        """Recursively bind drag events to widget and its children"""
+        try:
+            # Skip certain widget types that should handle their own events
+            if isinstance(widget, (tk.Button, ttk.Button, tk.Checkbutton, ttk.Checkbutton)):
+                return
+                
+            self.bind_drag_events(widget)
+            
+            # Recursively bind to children
+            for child in widget.winfo_children():
+                self.bind_drag_events_recursive(child)
+        except:
+            pass  # Handle any widget access errors gracefully
+    
+    def start_drag_zoom_panel(self, event):
+        """Start dragging the zoom panel"""
+        # Don't start drag if clicking on interactive elements
+        if isinstance(event.widget, (tk.Button, ttk.Button, tk.Checkbutton, ttk.Checkbutton)):
+            return
+            
+        self.zoom_panel_drag_data["dragging"] = True
+        self.zoom_panel_drag_data["x"] = event.x_root
+        self.zoom_panel_drag_data["y"] = event.y_root
+    
+    def on_drag_zoom_panel(self, event):
+        """Handle dragging the zoom panel"""
+        if not self.zoom_panel_drag_data["dragging"]:
+            return
+            
+        # Calculate how much the mouse has moved
+        delta_x = event.x_root - self.zoom_panel_drag_data["x"]
+        delta_y = event.y_root - self.zoom_panel_drag_data["y"]
+        
+        # Get current position
+        current_x = self.zoom_panel.winfo_x()
+        current_y = self.zoom_panel.winfo_y()
+        
+        # Calculate new position
+        new_x = current_x + delta_x
+        new_y = current_y + delta_y
+        
+        # Keep panel within parent bounds (with some margin)
+        parent_width = self.zoom_panel.master.winfo_width()
+        parent_height = self.zoom_panel.master.winfo_height()
+        panel_width = self.zoom_panel.winfo_reqwidth()
+        panel_height = self.zoom_panel.winfo_reqheight()
+        
+        new_x = max(0, min(new_x, parent_width - panel_width))
+        new_y = max(0, min(new_y, parent_height - panel_height))
+        
+        # Move the panel
+        self.zoom_panel.place(x=new_x, y=new_y)
+        
+        # Update drag data
+        self.zoom_panel_drag_data["x"] = event.x_root
+        self.zoom_panel_drag_data["y"] = event.y_root
+    
+    def stop_drag_zoom_panel(self, event):
+        """Stop dragging the zoom panel"""
+        self.zoom_panel_drag_data["dragging"] = False
+    
+    def update_image_description(self, description):
+        """Update the image description text"""
+        if hasattr(self, 'description_text'):
+            self.description_text.config(state=tk.NORMAL)
+            self.description_text.delete(1.0, tk.END)
+            if description:
+                self.description_text.insert(1.0, description)
+            else:
+                self.description_text.insert(1.0, "No description available for this image.")
+            self.description_text.config(state=tk.DISABLED)
+        
         
     def setup_calibration_controls(self, parent):
         """Setup axis calibration controls"""
-        frame = ttk.LabelFrame(parent, text="2. Calibrate Axes", padding=5)
+        frame = ttk.LabelFrame(parent, text="1. Calibrate Axes", padding=5)
         frame.pack(fill=tk.X, pady=(0, 10))
         
         self.calibration_status = ttk.Label(frame, text="Click on X-axis minimum point", foreground="gold")
@@ -201,6 +462,8 @@ class SurvivalCurveExtractor:
         self.x_units_entry = ttk.Entry(x_units_frame)
         self.x_units_entry.insert(0, self.x_axis_units)
         self.x_units_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        self.x_units_entry.bind('<KeyRelease>', self.on_units_change)
+        self.x_units_entry.bind('<FocusOut>', self.on_units_change)
         
         # Y-axis units (auto-resizable)
         y_units_frame = ttk.Frame(units_frame)
@@ -209,10 +472,12 @@ class SurvivalCurveExtractor:
         self.y_units_entry = ttk.Entry(y_units_frame)
         self.y_units_entry.insert(0, self.y_axis_units)
         self.y_units_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        self.y_units_entry.bind('<KeyRelease>', self.on_units_change)
+        self.y_units_entry.bind('<FocusOut>', self.on_units_change)
         
     def setup_groups_controls(self, parent):
         """Setup group management controls"""
-        frame = ttk.LabelFrame(parent, text="3. Set Groups", padding=5)
+        frame = ttk.LabelFrame(parent, text="2. Set Groups", padding=5)
         frame.pack(fill=tk.X, pady=(0, 10))
         
         # Button to add new group
@@ -247,14 +512,13 @@ class SurvivalCurveExtractor:
         
     def setup_extraction_controls(self, parent):
         """Setup data extraction controls"""
-        frame = ttk.LabelFrame(parent, text="4. Set Time Points at Survival Rates", padding=5)
+        frame = ttk.LabelFrame(parent, text="3. Set Time Points at Survival Rates", padding=5)
         frame.pack(fill=tk.X, pady=(0, 10))
         
         # Instructions for new workflow
         instruction_label = ttk.Label(frame, text="Select a point in the table below, then click on the image to set its position", foreground="gold")
         instruction_label.pack(fill=tk.X, pady=5)
         
-        ttk.Button(frame, text="Show Survival Rate Lines", command=self.show_survival_rate_lines).pack(fill=tk.X, pady=2)
         
         # Data points list view
         ttk.Label(frame, text="Extracted Points:").pack(fill=tk.X, pady=(10, 0))
@@ -292,13 +556,17 @@ class SurvivalCurveExtractor:
         
     def setup_export_controls(self, parent):
         """Setup export controls"""
-        frame = ttk.LabelFrame(parent, text="5. Export Data", padding=5)
+        frame = ttk.LabelFrame(parent, text="4. Complete Image", padding=5)
         frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Button(frame, text="Export JSON", command=self.export_data).pack(fill=tk.X, pady=2)
+        # Create dynamic Done/Undone button (will be updated based on status)
+        self.done_undone_btn = ttk.Button(frame, text="Done", command=self.toggle_done_status)
+        self.done_undone_btn.pack(fill=tk.X, pady=2)
+        
+        ttk.Button(frame, text="Report Error", command=self.report_error).pack(fill=tk.X, pady=2)
         ttk.Button(frame, text="View Data", command=self.view_data).pack(fill=tk.X, pady=2)
         
-        self.export_status = ttk.Label(frame, text="Ready to export time values for survival rates", foreground="gold")
+        self.export_status = ttk.Label(frame, text="Ready to mark image as complete", foreground="gold")
         self.export_status.pack(fill=tk.X, pady=5)
         
     def load_image(self):
@@ -379,7 +647,6 @@ class SurvivalCurveExtractor:
             self.display_image_on_canvas()
             
             # Update UI
-            self.image_label.config(text=f"Loaded: {Path(file_path).name}")
             self.calibration_btn.config(state=tk.NORMAL)
             
         except Exception as e:
@@ -402,7 +669,13 @@ class SurvivalCurveExtractor:
         
         scale_x = (canvas_width - 50) / img_width
         scale_y = (canvas_height - 50) / img_height
-        self.scale_factor = min(scale_x, scale_y, 1.0)  # Don't scale up
+        base_scale = min(scale_x, scale_y, 1.0)  # Don't scale up beyond original
+        
+        # Apply zoom level to base scale
+        if hasattr(self, 'zoom_level'):
+            self.scale_factor = base_scale * self.zoom_level
+        else:
+            self.scale_factor = base_scale
         
         # Resize image
         new_width = int(img_width * self.scale_factor)
@@ -420,6 +693,41 @@ class SurvivalCurveExtractor:
         
         # Update canvas scroll region
         self.canvas.configure(scrollregion=(0, 0, new_width + 50, new_height + 50))
+        
+        # Show/hide scrollbars based on image size vs canvas size
+        self.update_scrollbars(new_width, new_height)
+    
+    def update_scrollbars(self, image_width, image_height):
+        """Show or hide scrollbars based on whether image is larger than canvas"""
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        
+        # Debug output
+        print(f"Canvas size: {canvas_width}x{canvas_height}, Image size: {image_width}x{image_height}")
+        
+        # Only show scrollbars if we have valid canvas dimensions
+        if canvas_width > 1 and canvas_height > 1:
+            # Check if image (plus padding) is larger than canvas
+            needs_h_scroll = (image_width + 50) > canvas_width
+            needs_v_scroll = (image_height + 50) > canvas_height
+            
+            print(f"Needs H scroll: {needs_h_scroll}, Needs V scroll: {needs_v_scroll}")
+            
+            # Manage horizontal scrollbar using grid
+            if needs_h_scroll:
+                print("Showing horizontal scrollbar")
+                self.h_scrollbar.grid(row=1, column=0, sticky="ew")
+            else:
+                print("Hiding horizontal scrollbar")
+                self.h_scrollbar.grid_remove()
+            
+            # Manage vertical scrollbar using grid
+            if needs_v_scroll:
+                print("Showing vertical scrollbar")
+                self.v_scrollbar.grid(row=0, column=1, sticky="ns")
+            else:
+                print("Hiding vertical scrollbar")
+                self.v_scrollbar.grid_remove()
         
     def add_overlays_to_image(self):
         """Add calibration points, lines, and data points to image"""
@@ -561,6 +869,8 @@ class SurvivalCurveExtractor:
             self.axis_calibration['y_max_coord'] = (x, y)
             self.calibration_step = 4
             next_instruction = "Calibration complete! Set groups to start extracting data."
+            # Auto-populate points with survival axis coordinates after calibration
+            self.auto_populate_survival_coordinates()
             
         # Clear input and update UI
         self.calibration_value.delete(0, tk.END)
@@ -571,6 +881,9 @@ class SurvivalCurveExtractor:
             
         # Refresh display
         self.display_image_on_canvas()
+        
+        # Auto-save after calibration changes
+        self.auto_save_current_state()
         
     def reset_calibration(self):
         """Reset calibration data"""
@@ -592,7 +905,7 @@ class SurvivalCurveExtractor:
         return all(v is not None for v in self.axis_calibration.values())
         
     def handle_data_point_click(self, x, y):
-        """Handle data point selection clicks"""
+        """Handle data point selection clicks - only set X coordinate, Y is pre-calculated"""
         if not self.is_calibration_complete():
             messagebox.showwarning("Calibration Required", "Please complete axis calibration first.")
             return
@@ -605,9 +918,18 @@ class SurvivalCurveExtractor:
         if not self.selected_point_key:
             messagebox.showwarning("Point Selection Required", "Please select a point in the table first, then click on the image.")
             return
+        
+        # Get existing point (should have Y coordinate pre-calculated)
+        existing_point = self.selected_points.get(self.selected_point_key)
+        if not existing_point or existing_point.get('y') is None:
+            messagebox.showwarning("Invalid Point", "Selected point doesn't have survival coordinates. Please populate points first.")
+            return
             
-        # Store the data point for the selected table entry
-        self.selected_points[self.selected_point_key] = {'x': x, 'y': y}
+        # Store only the X coordinate (time), keep the existing Y coordinate (survival)
+        self.selected_points[self.selected_point_key] = {
+            'x': x,  # User-clicked time position
+            'y': existing_point['y']  # Pre-calculated survival position
+        }
         
         # Calculate real coordinates
         real_x, real_y = self.get_real_coordinates(x, y)
@@ -625,6 +947,9 @@ class SurvivalCurveExtractor:
         # Refresh display
         self.display_image_on_canvas()
         
+        # Auto-save after data point changes
+        self.auto_save_current_state()
+        
     def get_real_coordinates(self, pixel_x, pixel_y):
         """Convert pixel coordinates to real axis values"""
         if not self.is_calibration_complete():
@@ -640,14 +965,6 @@ class SurvivalCurveExtractor:
         real_y = y_min_val + (y_max_coord - pixel_y) * (y_max_val - y_min_val) / (y_max_coord - y_min_coord)
         
         return real_x, real_y
-        
-    def show_survival_rate_lines(self):
-        """Show survival rate lines on the image"""
-        if not self.is_calibration_complete():
-            messagebox.showwarning("Calibration Required", "Please complete axis calibration first.")
-            return
-            
-        self.display_image_on_canvas()
         
     def export_data(self):
         """Export data to JSON file"""
@@ -757,6 +1074,239 @@ class SurvivalCurveExtractor:
         text_widget.insert(tk.END, output)
         text_widget.config(state=tk.DISABLED)
         
+    def mark_done(self):
+        """Mark current image as done"""
+        if not self.current_image_path:
+            messagebox.showwarning("No Image", "Please select an image first.")
+            return
+            
+        # Auto-save current state with done status
+        self.auto_save_current_state(status="done")
+        self.export_status.config(text="Image marked as DONE ✓")
+        
+        # Update navigation to show status
+        self.update_navigation_status()
+        
+        # Update the done/undone button
+        self.update_done_undone_button()
+        
+    def toggle_done_status(self):
+        """Toggle between done and undone status"""
+        if not self.current_image_path:
+            messagebox.showwarning("No Image", "Please select an image first.")
+            return
+            
+        # Check current status
+        current_status = self.get_current_image_status()
+        
+        if current_status == "done":
+            # Image is done, so undone it
+            self.mark_undone()
+        else:
+            # Image is not done (or has error), so mark as done
+            self.mark_done()
+    
+    def get_current_image_status(self):
+        """Get the current status of the loaded image"""
+        if not self.dataset_path or not self.image_files or self.current_index >= len(self.image_files):
+            return None
+            
+        base_name = self.image_files[self.current_index]
+        try:
+            results_path = self.dataset_path / "results" / f"{base_name}.json"
+            if results_path.exists():
+                with open(results_path, 'r') as f:
+                    data = json.load(f)
+                return data.get("status")
+        except Exception as e:
+            print(f"Error getting status for {base_name}: {e}")
+        return None
+        
+    def mark_undone(self):
+        """Remove done/error status from current image"""
+        if not self.current_image_path:
+            messagebox.showwarning("No Image", "Please select an image first.")
+            return
+            
+        # Remove status by saving with empty status and error
+        self.auto_save_current_state_clear_status()
+        self.export_status.config(text="Status cleared - ready to mark image")
+        
+        # Update navigation to show status
+        self.update_navigation_status()
+        
+        # Update the done/undone button
+        self.update_done_undone_button()
+        
+    def update_done_undone_button(self):
+        """Update the done/undone button text based on current status"""
+        if not hasattr(self, 'done_undone_btn'):
+            return
+            
+        current_status = self.get_current_image_status()
+        
+        if current_status == "done":
+            self.done_undone_btn.config(text="Undone")
+        else:
+            self.done_undone_btn.config(text="Done")
+        
+    def report_error(self):
+        """Report an error for current image"""
+        if not self.current_image_path:
+            messagebox.showwarning("No Image", "Please select an image first.")
+            return
+            
+        # Show dialog to input error text
+        error_text = simpledialog.askstring(
+            "Report Error",
+            "Describe the error or issue with this image:",
+            initialvalue=""
+        )
+        
+        if error_text:  # Only proceed if user entered text and didn't cancel
+            # Auto-save current state with error status
+            self.auto_save_current_state(status="error", error=error_text.strip())
+            self.export_status.config(text="Error reported ✗")
+            messagebox.showinfo("Error Reported", "Error has been recorded for this image!")
+            
+            # Update navigation to show status
+            self.update_navigation_status()
+            
+            # Update the done/undone button
+            self.update_done_undone_button()
+    
+    def update_navigation_status(self):
+        """Update navigation display with status indicators"""
+        if not hasattr(self, 'image_counter_label') or not self.dataset_path:
+            return
+            
+        if self.current_index >= len(self.image_files):
+            return
+            
+        current_file = self.image_files[self.current_index]
+        status_indicator = self.get_image_status_indicator(current_file)
+        
+        # Update the counter label to include status
+        counter_text = f"{self.current_index + 1}/{len(self.image_files)} {status_indicator}"
+        self.image_counter_label.config(text=counter_text)
+        
+        # Update progress info if it exists
+        if hasattr(self, 'progress_label'):
+            self.update_progress_info()
+    
+    def get_image_status_indicator(self, base_name):
+        """Get status indicator (✓/✗/○) for an image"""
+        try:
+            results_path = self.dataset_path / "results" / f"{base_name}.json"
+            if results_path.exists():
+                with open(results_path, 'r') as f:
+                    data = json.load(f)
+                
+                if "status" in data:
+                    if data["status"] == "done":
+                        return "✓"
+                    elif data["status"] == "error":
+                        return "✗"
+            return "○"  # Not completed
+        except:
+            return "○"
+    
+    def get_completion_stats(self):
+        """Get completion statistics for the dataset"""
+        if not self.dataset_path or not self.image_files:
+            return 0, 0, 0
+            
+        done_count = 0
+        error_count = 0
+        total_count = len(self.image_files)
+        
+        for image_file in self.image_files:
+            try:
+                results_path = self.dataset_path / "results" / f"{image_file}.json"
+                if results_path.exists():
+                    with open(results_path, 'r') as f:
+                        data = json.load(f)
+                    
+                    if "status" in data:
+                        if data["status"] == "done":
+                            done_count += 1
+                        elif data["status"] == "error":
+                            error_count += 1
+            except:
+                continue
+                
+        return done_count, error_count, total_count
+    
+    def refresh_groups_ui(self):
+        """Refresh groups UI to match current groups list without triggering auto-population"""
+        # Set flag to prevent auto-population during UI refresh
+        self.ui_refreshing = True
+        
+        # Clear existing group entries
+        for group_data in self.group_entries:
+            group_data['frame'].destroy()
+        self.group_entries.clear()
+        
+        # Add group fields for current groups (without triggering events)
+        for i, group_name in enumerate(self.groups):
+            self.add_group_field_silent()
+            if self.group_entries:
+                last_entry = self.group_entries[-1]['entry']
+                last_entry.delete(0, tk.END)
+                last_entry.insert(0, group_name)
+                # Bind the event AFTER setting the value to avoid triggering during restore
+                last_entry.bind('<KeyRelease>', lambda e: self.update_groups())
+        
+        # Add one empty field if no groups exist
+        if not self.groups:
+            self.add_group_field()
+        
+        # Clear the flag
+        self.ui_refreshing = False
+        
+        print(f"Refreshed UI for {len(self.groups)} groups: {self.groups}")
+    
+    def update_progress_info(self):
+        """Update progress label with completion stats"""
+        if not hasattr(self, 'progress_label'):
+            return
+            
+        done_count, error_count, total_count = self.get_completion_stats()
+        completed_count = done_count + error_count
+        percentage = int((completed_count / total_count) * 100) if total_count > 0 else 0
+        
+        progress_text = f"Progress: {completed_count}/{total_count} ({percentage}%)"
+        self.progress_label.config(text=progress_text)
+    
+    def apply_incomplete_filter(self):
+        """Apply or remove incomplete images filter"""
+        if not self.dataset_path or not self.image_files:
+            return
+            
+        if self.only_incomplete_var.get():
+            # Filter to show only incomplete images
+            self.filtered_image_files = []
+            for image_file in self.image_files:
+                status_indicator = self.get_image_status_indicator(image_file)
+                if status_indicator == "○":  # Not completed
+                    self.filtered_image_files.append(image_file)
+            
+            # Reset current index to first incomplete image
+            if self.filtered_image_files:
+                self.current_index = 0
+                self.load_image_by_index(0, use_filtered=True)
+            else:
+                messagebox.showinfo("All Complete", "All images have been completed!")
+                self.only_incomplete_var.set(False)  # Uncheck the box
+        else:
+            # Show all images
+            self.filtered_image_files = None
+            # Keep current image if possible
+            if self.current_index < len(self.image_files):
+                self.load_image_by_index(self.current_index, use_filtered=False)
+        
+        self.update_navigation_controls()
+        
     def on_axis_type_change(self, event=None):
         """Handle axis type change"""
         selected_x = self.x_axis_var.get()
@@ -771,6 +1321,22 @@ class SurvivalCurveExtractor:
             
         # Reset calibration when axis types change
         self.reset_calibration()
+    
+    def on_units_change(self, event=None):
+        """Handle axis units change"""
+        # Update internal units values
+        if hasattr(self, 'x_units_entry'):
+            new_x_units = self.x_units_entry.get().strip()
+            if new_x_units:
+                self.x_axis_units = new_x_units
+        
+        if hasattr(self, 'y_units_entry'):
+            new_y_units = self.y_units_entry.get().strip()
+            if new_y_units:
+                self.y_axis_units = new_y_units
+        
+        # Auto-save changes
+        self.auto_save_current_state()
         
     def show_zoom_window(self, center_x, center_y):
         """Show zoom window for precise calibration"""
@@ -807,11 +1373,43 @@ class SurvivalCurveExtractor:
         cropped = self.original_image.crop((left, top, right, bottom))
         zoomed = cropped.resize((self.zoom_size*2, self.zoom_size*2), Image.Resampling.NEAREST)
         
-        # Draw crosshairs at center
+        # Draw enhanced guidelines
         draw = ImageDraw.Draw(zoomed)
         center = self.zoom_size
-        draw.line([(center-10, center), (center+10, center)], fill='red', width=2)
-        draw.line([(center, center-10), (center, center+10)], fill='red', width=2)
+        zoom_width = self.zoom_size * 2
+        zoom_height = self.zoom_size * 2
+        
+        # Draw center crosshairs
+        draw.line([(center-15, center), (center+15, center)], fill='red', width=2)
+        draw.line([(center, center-15), (center, center+15)], fill='red', width=2)
+        
+        # Draw survival percentage guidelines if calibrated
+        if self.is_calibrated():
+            # Get Y coordinates for survival percentages
+            y_min_coord = self.axis_calibration['y_min_coord'][1] if self.axis_calibration['y_min_coord'] else None
+            y_max_coord = self.axis_calibration['y_max_coord'][1] if self.axis_calibration['y_max_coord'] else None
+            
+            if y_min_coord is not None and y_max_coord is not None:
+                # Calculate survival line positions
+                survival_percentages = [0, 25, 50, 75, 100]
+                
+                for percentage in survival_percentages:
+                    # Calculate Y position for this survival percentage
+                    ratio = percentage / 100.0
+                    survival_y = y_min_coord - (ratio * (y_min_coord - y_max_coord))
+                    
+                    # Check if this line is visible in the zoom view
+                    relative_y = survival_y - top
+                    if 0 <= relative_y <= (bottom - top):
+                        # Scale to zoom view
+                        zoom_y = int(relative_y * zoom_height / (bottom - top))
+                        
+                        # Draw the survival guideline
+                        color = 'red'
+                        draw.line([(0, zoom_y), (zoom_width, zoom_y)], fill=color, width=2)
+                        
+                        # Add percentage label
+                        draw.text((5, zoom_y + 2), f"{percentage}%", fill=color)
         
         # Display zoomed image
         self.zoom_photo = ImageTk.PhotoImage(zoomed)
@@ -819,7 +1417,8 @@ class SurvivalCurveExtractor:
         self.zoom_canvas.create_image(0, 0, anchor=tk.NW, image=self.zoom_photo)
         
     def on_canvas_motion(self, event):
-        """Handle mouse motion for continuous zoom"""
+        """Handle mouse motion for pan mode"""
+        # Legacy zoom functionality (if enabled)
         if not self.canvas_image or not self.zoom_enabled.get():
             return
             
@@ -861,10 +1460,6 @@ class SurvivalCurveExtractor:
         
         # Refresh display
         self.display_image_on_canvas()
-        
-    def on_canvas_release(self, event):
-        """Handle mouse button release"""
-        self.dragging_point = None
         
     def on_zoom_toggle(self):
         """Handle zoom enable/disable toggle"""
@@ -949,6 +1544,9 @@ class SurvivalCurveExtractor:
                     # Update display
                     self.update_points_tree()
                     self.display_image_on_canvas()
+                    
+                    # Auto-save after table edit
+                    self.auto_save_current_state()
                         
     def on_treeview_delete(self, event):
         """Handle Delete/Backspace key to remove selected points"""
@@ -979,6 +1577,9 @@ class SurvivalCurveExtractor:
         # Update display
         self.update_points_tree()
         self.display_image_on_canvas()
+        
+        # Auto-save after point deletion
+        self.auto_save_current_state()
     
     def on_treeview_select(self, event):
         """Handle table row selection to set active point for clicking"""
@@ -1032,6 +1633,32 @@ class SurvivalCurveExtractor:
             
         # Auto-update groups
         self.update_groups()
+    
+    def add_group_field_silent(self):
+        """Add a new group input field without event binding (for restore operations)"""
+        group_frame = ttk.Frame(self.groups_scrollable_frame)
+        group_frame.pack(fill=tk.X, pady=2)
+        
+        # Group number label (auto-size)
+        group_num = len(self.group_entries) + 1
+        label = ttk.Label(group_frame, text=f"Group {group_num}:")
+        label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Group name entry (auto-resizable) - NO EVENT BINDING
+        entry = ttk.Entry(group_frame)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        
+        # Delete button
+        delete_btn = ttk.Button(group_frame, text="×", width=2, 
+                               command=lambda: self.remove_group_field(group_frame, entry))
+        delete_btn.pack(side=tk.LEFT)
+        
+        # Store reference
+        self.group_entries.append({'frame': group_frame, 'entry': entry, 'label': label})
+        
+        # Update scroll region
+        self.groups_scrollable_frame.update_idletasks()
+        self.groups_canvas.configure(scrollregion=self.groups_canvas.bbox("all"))
             
     def remove_group_field(self, frame, entry):
         """Remove a group input field"""
@@ -1052,16 +1679,32 @@ class SurvivalCurveExtractor:
         
     def update_groups(self):
         """Update groups from all entry fields"""
+        # Store previous groups to detect changes
+        previous_groups = self.groups.copy() if hasattr(self, 'groups') else []
+        
         self.groups = []
         for group_data in self.group_entries:
             group_name = group_data['entry'].get().strip()
             if group_name:
                 self.groups.append(group_name)
         
+        # If groups have changed, handle renames first, then clean up removed groups
+        if previous_groups != self.groups:
+            # Handle potential group renames before cleanup
+            if len(previous_groups) == len(self.groups) and previous_groups and self.groups:
+                self.handle_group_rename(previous_groups, self.groups)
+            else:
+                # Automatically cleanup removed groups and their points
+                self.cleanup_removed_groups()
+        
         # Groups are now displayed directly in the input fields and table
         
-        # Populate all possible points in the table when groups change
-        self.populate_all_points()
+        # Only populate missing points (don't remove existing ones)
+        self.populate_missing_points()
+        
+        # If calibration is complete, also auto-populate survival coordinates (but not during UI refresh)
+        if self.is_calibrated() and not getattr(self, 'ui_refreshing', False):
+            self.auto_populate_survival_coordinates()
         
         # Update points tree view if it exists
         if hasattr(self, 'points_tree'):
@@ -1073,6 +1716,9 @@ class SurvivalCurveExtractor:
                 if first_item:
                     self.points_tree.selection_set(first_item[0])
                     self.points_tree.focus(first_item[0])
+            
+        # Auto-save after group changes
+        self.auto_save_current_state()
     
     def populate_all_points(self):
         """Create entries for all group-survival rate combinations and clean up removed groups"""
@@ -1102,6 +1748,94 @@ class SurvivalCurveExtractor:
                 if key not in self.selected_points:
                     # Add placeholder point with no coordinates (will show as "N/A")
                     self.selected_points[key] = {'x': None, 'y': None}
+    
+    def populate_missing_points(self):
+        """Create entries only for missing group-survival rate combinations (preserves existing points)"""
+        if not self.groups:
+            return
+            
+        points_added = 0
+        # Create placeholder entries only for combinations that don't exist
+        for group in self.groups:
+            for survival_rate in self.survival_rates:
+                key = f"{group}_{survival_rate}"
+                if key not in self.selected_points:
+                    # Add placeholder point with no coordinates (will show as "N/A")
+                    print(f"Adding missing placeholder point: {key}")
+                    self.selected_points[key] = {'x': None, 'y': None}
+                    points_added += 1
+                else:
+                    print(f"Preserving existing point: {key}")
+        
+        if points_added > 0:
+            print(f"populate_missing_points: Added {points_added} placeholder points")
+    
+    
+    def auto_populate_survival_coordinates(self):
+        """Automatically populate points with survival axis coordinates after calibration"""
+        print(f"Auto-populate called: calibrated={self.is_calibrated()}, groups={len(self.groups) if self.groups else 0}")
+        if not self.is_calibrated() or not self.groups:
+            return
+        
+        # Calculate Y coordinates for each survival rate
+        survival_percentages = [0, 25, 50, 75, 100]  # Convert survival_rates to numeric values
+        survival_y_coords = {}
+        
+        # Get calibration values
+        y_min_val = self.axis_calibration['y_min']
+        y_max_val = self.axis_calibration['y_max']
+        y_min_coord = self.axis_calibration['y_min_coord'][1]  # pixel Y of minimum survival
+        y_max_coord = self.axis_calibration['y_max_coord'][1]  # pixel Y of maximum survival
+        
+        # Calculate pixel Y coordinate for each survival percentage
+        for i, percentage in enumerate(survival_percentages):
+            survival_rate = self.survival_rates[i]  # "0%", "25%", etc.
+            
+            # Linear interpolation between min and max survival coordinates
+            # Note: Y coordinates are flipped (higher survival = lower pixel Y)
+            ratio = percentage / 100.0
+            pixel_y = y_min_coord - (ratio * (y_min_coord - y_max_coord))
+            survival_y_coords[survival_rate] = pixel_y
+        
+        # Create points for all group-survival rate combinations
+        points_added = 0
+        for group in self.groups:
+            for survival_rate in self.survival_rates:
+                key = f"{group}_{survival_rate}"
+                
+                # Check if point exists and is already populated/set
+                existing_point = self.selected_points.get(key)
+                
+                # Only add/update if point doesn't exist OR if it's completely empty
+                if existing_point is None:
+                    # Point doesn't exist - create new one
+                    print(f"Creating new point: {key}")
+                    self.selected_points[key] = {
+                        'x': None,  # User needs to click to set time coordinate
+                        'y': survival_y_coords[survival_rate]  # Auto-calculated survival coordinate
+                    }
+                    points_added += 1
+                elif existing_point.get('x') is None and existing_point.get('y') is None:
+                    # Point exists but is completely empty - add Y coordinate only
+                    print(f"Adding Y coordinate to empty point: {key}")
+                    self.selected_points[key]['y'] = survival_y_coords[survival_rate]
+                elif existing_point.get('y') is None and existing_point.get('x') is not None:
+                    # Point has X but no Y - add Y coordinate
+                    print(f"Adding Y coordinate to point with X: {key}")
+                    self.selected_points[key]['y'] = survival_y_coords[survival_rate]
+                else:
+                    # Point already has data - don't touch it
+                    print(f"Preserving existing point: {key} = {existing_point}")
+        
+        print(f"Auto-populate completed: {points_added} points added, total points: {len(self.selected_points)}")
+        
+        if points_added > 0 or True:  # Always update display even if no new points added
+            # Update the points tree view
+            if hasattr(self, 'points_tree'):
+                self.update_points_tree()
+            
+            # Auto-save the populated points
+            self.auto_save_current_state()
         
     def clear_all_groups(self):
         """Clear all group fields"""
@@ -1121,9 +1855,661 @@ class SurvivalCurveExtractor:
         """Start the application"""
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.root.mainloop()
+    
+    def select_dataset(self):
+        """Select the extraction_data folder containing PNG and metadata"""
+        folder_path = filedialog.askdirectory(title="Select extraction_data folder")
+        if folder_path:
+            extraction_path = Path(folder_path)
+            png_path = extraction_path / "png"
+            metadata_path = extraction_path / "metatdata"  # Note: typo in original folder name
+            
+            if png_path.exists() and metadata_path.exists():
+                self.dataset_path = extraction_path
+                self.load_dataset()
+            else:
+                messagebox.showerror("Invalid Dataset", 
+                    "Selected folder must contain 'png' and 'metatdata' subfolders")
+    
+    def load_dataset(self):
+        """Load all images from the dataset"""
+        png_path = self.dataset_path / "png"
         
+        # Get all PNG files and sort them
+        png_files = list(png_path.glob("*.png"))
+        png_files.sort()
+        
+        # Store just the base names (without .png extension)
+        self.image_files = [f.stem for f in png_files]
+        self.current_index = 0
+        
+        # Update UI
+        self.dataset_label.config(text=f"{len(self.image_files)} images loaded")
+        self.update_navigation_state()
+        
+        # Load first image if available
+        if self.image_files:
+            self.load_image_by_index(0)
+    
+    def load_image_by_index(self, index, use_filtered=None):
+        """Load image and metadata by index"""
+        # Determine which image list to use
+        if use_filtered is None:
+            use_filtered = self.only_incomplete_var.get() if hasattr(self, 'only_incomplete_var') else False
+        
+        current_list = self.filtered_image_files if (use_filtered and self.filtered_image_files) else self.image_files
+        
+        if 0 <= index < len(current_list):
+            self.current_index = index
+            base_name = current_list[index]
+            
+            # Reset calibration and points for new image (will be overridden if saved data exists)
+            self.reset_for_new_image()
+            
+            # Load PNG image
+            png_path = self.dataset_path / "png" / f"{base_name}.png"
+            self.load_image_file(str(png_path))
+            
+            # Load previous extraction data FIRST (prioritize saved results)
+            self.load_extraction_data(base_name)
+            
+            # Load metadata only as fallback if no saved data exists
+            self.load_metadata(base_name)
+            
+            # Update navigation UI
+            self.update_navigation_state()
+            
+            # Update the done/undone button based on loaded image status
+            self.update_done_undone_button()
+    
+    def reset_for_new_image(self):
+        """Reset state when loading a new image"""
+        # Reset calibration
+        self.axis_calibration = {
+            'x_min': None, 'x_max': None, 'y_min': None, 'y_max': None,
+            'x_min_coord': None, 'x_max_coord': None, 'y_min_coord': None, 'y_max_coord': None
+        }
+        self.calibration_step = 0
+        
+        # Reset points
+        self.selected_points.clear()
+        self.selected_point_key = None
+        
+        # Reset groups (will be restored from metadata or saved data)
+        self.groups.clear()
+        
+        # Update UI
+        self.calibration_status.config(text="Click on X-axis minimum point")
+        if hasattr(self, 'calibration_btn'):
+            self.calibration_btn.config(state=tk.DISABLED)
+    
+    def load_metadata(self, base_name):
+        """Load metadata for the current image and auto-populate groups"""
+        metadata_path = self.dataset_path / "metatdata" / f"{base_name}.json"
+        
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                
+                # Cache metadata
+                self.metadata_cache[base_name] = metadata
+                
+                # Store metadata groups for potential use
+                if 'groups_survival_experiment' in metadata:
+                    self.metadata_groups = metadata['groups_survival_experiment']
+                    
+                    # Only populate groups from metadata if no groups are already loaded (from saved results)
+                    if not self.groups:
+                        print(f"Loading groups from metadata for {base_name}: {self.metadata_groups}")
+                        self.auto_populate_groups(self.metadata_groups)
+                else:
+                    self.metadata_groups = []
+                
+                # Update image description
+                self.update_image_description(metadata.get('image_description', ''))
+                
+            except Exception as e:
+                print(f"Error loading metadata for {base_name}: {e}")
+                self.metadata_cache[base_name] = {}
+                self.update_image_description("Error loading image description.")
+        else:
+            # No metadata file found
+            self.update_image_description("No metadata file found for this image.")
+    
+    def auto_populate_groups(self, groups):
+        """Auto-populate group entries from metadata"""
+        # Clear existing groups
+        self.groups = []
+        for group_entry in self.group_entries:
+            group_entry['frame'].destroy()
+        self.group_entries = []
+        
+        # Add groups from metadata
+        for group_name in groups:
+            self.add_group_field()
+            # Set the name in the last added entry
+            if self.group_entries:
+                last_entry = self.group_entries[-1]['entry']
+                last_entry.delete(0, tk.END)
+                last_entry.insert(0, group_name)
+        
+        # Update the points table and groups
+        self.update_groups()
+    
+    def prev_image(self):
+        """Navigate to previous image"""
+        current_list = self.get_current_image_list()
+        if self.current_index > 0:
+            # Auto-save current state before navigating
+            self.auto_save_current_state()
+            self.load_image_by_index(self.current_index - 1)
+    
+    def next_image(self):
+        """Navigate to next image"""
+        current_list = self.get_current_image_list()
+        if self.current_index < len(current_list) - 1:
+            # Auto-save current state before navigating
+            self.auto_save_current_state()
+            self.load_image_by_index(self.current_index + 1)
+    
+    def get_current_image_list(self):
+        """Get the current image list (filtered or full)"""
+        use_filtered = hasattr(self, 'only_incomplete_var') and self.only_incomplete_var.get()
+        return self.filtered_image_files if (use_filtered and self.filtered_image_files) else self.image_files
+    
+    def update_navigation_state(self):
+        """Update navigation buttons and labels"""
+        if not self.image_files:
+            self.prev_btn.config(state=tk.DISABLED)
+            self.next_btn.config(state=tk.DISABLED)
+            if hasattr(self, 'image_counter_label'):
+                self.image_counter_label.config(text="0 of 0 ○")
+            self.current_file_label.config(text="")
+            return
+        
+        # Get current list and update navigation info
+        current_list = self.get_current_image_list()
+        total = len(current_list)
+        current = self.current_index + 1
+        
+        # Update current file display
+        if current_list and self.current_index < len(current_list):
+            current_file = current_list[self.current_index]
+            self.current_file_label.config(text=f"Current: {current_file}")
+            
+            # Update status indicators
+            self.update_navigation_status()
+            self.update_progress_info()
+        
+        # Update button states
+        self.prev_btn.config(state=tk.NORMAL if self.current_index > 0 else tk.DISABLED)
+        self.next_btn.config(state=tk.NORMAL if self.current_index < total - 1 else tk.DISABLED)
+    
+    def update_navigation_controls(self):
+        """Update navigation controls after filtering changes"""
+        self.update_navigation_state()
+    
+    def load_image_file(self, file_path):
+        """Load an image file (used by navigation system)"""
+        try:
+            self.current_image_path = file_path
+            self.original_image = Image.open(file_path)
+            
+            self.display_image_on_canvas()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load image: {str(e)}")
+
+    def auto_save_current_state(self, status=None, error=None):
+        """Automatically save the current extraction state"""
+        if not self.auto_save_enabled or not self.dataset_path or not self.image_files:
+            print("Auto-save skipped: not enabled or missing dataset/images")
+            return
+            
+        if self.current_index >= len(self.image_files):
+            print("Auto-save skipped: invalid current index")
+            return
+            
+        current_file = self.image_files[self.current_index]
+        print(f"Auto-saving: {current_file}")
+        self.save_extraction_data(current_file, status=status, error=error)
+    
+    def auto_save_current_state_clear_status(self):
+        """Save current state and clear status/error"""
+        if not self.auto_save_enabled or not self.dataset_path or not self.image_files:
+            print("Auto-save skipped: not enabled or missing dataset/images")
+            return
+            
+        if self.current_index >= len(self.image_files):
+            print("Auto-save skipped: invalid current index")
+            return
+            
+        current_file = self.image_files[self.current_index]
+        print(f"Auto-saving with cleared status: {current_file}")
+        self.save_extraction_data_clear_status(current_file)
+    
+    def save_extraction_data(self, base_name, status=None, error=None):
+        """Save extraction data for a specific image"""
+        try:
+            # Create results directory if it doesn't exist
+            results_path = self.dataset_path / "results"
+            results_path.mkdir(exist_ok=True)
+            
+            # Load existing data to preserve status and error information
+            result_file = results_path / f"{base_name}.json"
+            existing_status = None
+            existing_error = None
+            
+            if result_file.exists():
+                try:
+                    with open(result_file, 'r') as f:
+                        existing_data = json.load(f)
+                    existing_status = existing_data.get("status")
+                    existing_error = existing_data.get("error")
+                    print(f"Preserving existing status: {existing_status}, error: {existing_error}")
+                except Exception as e:
+                    print(f"Could not load existing status/error: {e}")
+            
+            # Note: We preserve all user-created points, even if groups change
+            
+            # Prepare data to save
+            save_data = {
+                "metadata": {
+                    "image_file": f"{base_name}.png",
+                    "extraction_date": self.get_current_timestamp(),
+                    "x_axis_type": self.x_axis_type,
+                    "y_axis_type": self.y_axis_type,
+                    "x_axis_units": self.x_axis_units,
+                    "y_axis_units": self.y_axis_units,
+                    "calibration": self.axis_calibration.copy(),
+                    "groups": self.groups.copy()
+                },
+                "extracted_points": {},
+                "raw_coordinates": {}
+            }
+            
+            # Handle status: use provided status, or preserve existing status
+            final_status = status if status is not None else existing_status
+            if final_status:
+                save_data["status"] = final_status
+                print(f"Saving status: {final_status}")
+            
+            # Handle error: use provided error, or preserve existing error
+            final_error = error if error is not None else existing_error
+            if final_error:
+                save_data["error"] = final_error
+                print(f"Saving error: {final_error}")
+            
+            # Process extracted points - include ALL points (populated and set)
+            for key, coord in self.selected_points.items():
+                # Parse key (format: "group_survivalrate")
+                try:
+                    group, survival_rate = key.rsplit('_', 1)
+                    
+                    # Only include if group still exists
+                    if group in self.groups:
+                        # Always save raw coordinates (even populated points with X=None)
+                        save_data["raw_coordinates"][key] = coord
+                        
+                        # Initialize extracted_points structure for this survival rate
+                        if survival_rate not in save_data["extracted_points"]:
+                            save_data["extracted_points"][survival_rate] = {}
+                        
+                        # Save time values for points with X coordinates set
+                        if coord is not None and coord.get('x') is not None:
+                            # Convert pixel coordinates to real values if calibration exists
+                            time_value = None
+                            if self.is_calibrated():
+                                time_value = self.pixel_to_real_x(coord['x'])
+                            
+                            save_data["extracted_points"][survival_rate][group] = time_value
+                        else:
+                            # For populated points without X coordinate, save as null
+                            save_data["extracted_points"][survival_rate][group] = None
+                    
+                except ValueError:
+                    # Handle malformed keys - save anyway for compatibility
+                    save_data["raw_coordinates"][key] = coord
+            
+            # Save to JSON file
+            result_file = results_path / f"{base_name}.json"
+            with open(result_file, 'w') as f:
+                json.dump(save_data, f, indent=2, default=str)
+                
+        except Exception as e:
+            print(f"Auto-save failed for {base_name}: {e}")
+    
+    def save_extraction_data_clear_status(self, base_name):
+        """Save extraction data and explicitly clear status/error fields"""
+        try:
+            # Create results directory if it doesn't exist
+            results_path = self.dataset_path / "results"
+            results_path.mkdir(exist_ok=True)
+            
+            # Prepare data to save (without status and error fields)
+            save_data = {
+                "metadata": {
+                    "image_file": f"{base_name}.png",
+                    "extraction_date": self.get_current_timestamp(),
+                    "x_axis_type": self.x_axis_type,
+                    "y_axis_type": self.y_axis_type,
+                    "x_axis_units": self.x_axis_units,
+                    "y_axis_units": self.y_axis_units,
+                    "calibration": self.axis_calibration.copy(),
+                    "groups": self.groups.copy()
+                },
+                "extracted_points": {},
+                "raw_coordinates": {}
+            }
+            
+            # Process extracted points - same as regular save
+            for key, coord in self.selected_points.items():
+                try:
+                    group, survival_rate = key.rsplit('_', 1)
+                    if group in self.groups:
+                        save_data["raw_coordinates"][key] = coord
+                        if survival_rate not in save_data["extracted_points"]:
+                            save_data["extracted_points"][survival_rate] = {}
+                        
+                        if coord is not None and coord.get('x') is not None:
+                            time_value = None
+                            if self.is_calibrated():
+                                time_value = self.pixel_to_real_x(coord['x'])
+                            save_data["extracted_points"][survival_rate][group] = time_value
+                        else:
+                            save_data["extracted_points"][survival_rate][group] = None
+                except ValueError:
+                    save_data["raw_coordinates"][key] = coord
+            
+            # Save to JSON file (deliberately not including status or error)
+            result_file = results_path / f"{base_name}.json"
+            with open(result_file, 'w') as f:
+                json.dump(save_data, f, indent=2, default=str)
+            
+            print(f"Status/error cleared for {base_name}")
+                
+        except Exception as e:
+            print(f"Clear status failed for {base_name}: {e}")
+    
+    def cleanup_removed_groups(self):
+        """Remove data points for groups that no longer exist"""
+        keys_to_remove = []
+        current_group_names = set(self.groups)
+        
+        for key in list(self.selected_points.keys()):
+            if '_' in key:
+                try:
+                    group, survival_rate = key.rsplit('_', 1)
+                    # If the group is no longer in the current groups list, mark for removal
+                    if group not in current_group_names:
+                        keys_to_remove.append(key)
+                except ValueError:
+                    continue
+        
+        # Remove the obsolete keys
+        if keys_to_remove:
+            removed_groups = set()
+            for key in keys_to_remove:
+                group, _ = key.rsplit('_', 1)
+                removed_groups.add(group)
+                del self.selected_points[key]
+            
+            print(f"Cleaned up {len(keys_to_remove)} points from {len(removed_groups)} removed groups: {', '.join(sorted(removed_groups))}")
+            
+            # Update the points tree view after cleanup
+            if hasattr(self, 'points_tree'):
+                self.update_points_tree()
+            
+            # Auto-save after cleanup
+            self.auto_save_current_state()
+    
+    def handle_group_rename(self, old_groups, new_groups):
+        """Handle group renaming by updating point keys"""
+        if len(old_groups) != len(new_groups):
+            return  # This is addition/removal, not renaming
+            
+        # Create mapping of old to new group names
+        group_mapping = {}
+        for old_group, new_group in zip(old_groups, new_groups):
+            if old_group != new_group and old_group and new_group:
+                group_mapping[old_group] = new_group
+        
+        if not group_mapping:
+            return  # No renames detected
+            
+        # Update keys in selected_points
+        points_to_update = {}
+        for old_key, coord in list(self.selected_points.items()):
+            if '_' in old_key:
+                try:
+                    group, survival_rate = old_key.rsplit('_', 1)
+                    if group in group_mapping:
+                        new_group = group_mapping[group]
+                        new_key = f"{new_group}_{survival_rate}"
+                        points_to_update[new_key] = coord
+                        del self.selected_points[old_key]
+                except ValueError:
+                    continue
+        
+        # Add the updated points
+        self.selected_points.update(points_to_update)
+    
+    def load_extraction_data(self, base_name):
+        """Load previously saved extraction data"""
+        try:
+            results_path = self.dataset_path / "results" / f"{base_name}.json"
+            groups_loaded = False
+            
+            if results_path.exists():
+                with open(results_path, 'r') as f:
+                    data = json.load(f)
+                
+                # Restore groups if saved (priority over metadata)
+                if "metadata" in data and "groups" in data["metadata"]:
+                    saved_groups = data["metadata"]["groups"]
+                    if saved_groups:  # Only use if not empty
+                        print(f"Using saved groups for {base_name}: {saved_groups}")
+                        self.groups = saved_groups.copy()  # Direct assignment without auto-population
+                        self.refresh_groups_ui()  # Update UI only
+                        groups_loaded = True
+                
+                # Restore axis types and units if saved (priority over defaults)
+                if "metadata" in data:
+                    metadata = data["metadata"]
+                    if "x_axis_type" in metadata:
+                        self.x_axis_type = metadata["x_axis_type"]
+                        if hasattr(self, 'x_axis_var'):
+                            self.x_axis_var.set(self.x_axis_type)
+                    if "y_axis_type" in metadata:
+                        self.y_axis_type = metadata["y_axis_type"]
+                        if hasattr(self, 'y_axis_label'):
+                            self.y_axis_label.config(text=metadata["y_axis_type"])
+                    if "x_axis_units" in metadata:
+                        self.x_axis_units = metadata["x_axis_units"]
+                        if hasattr(self, 'x_units_entry'):
+                            self.x_units_entry.delete(0, tk.END)
+                            self.x_units_entry.insert(0, self.x_axis_units)
+                    if "y_axis_units" in metadata:
+                        self.y_axis_units = metadata["y_axis_units"]
+                        if hasattr(self, 'y_units_entry'):
+                            self.y_units_entry.delete(0, tk.END)
+                            self.y_units_entry.insert(0, self.y_axis_units)
+                
+                # Restore calibration if saved
+                if "calibration" in data.get("metadata", {}):
+                    saved_calibration = data["metadata"]["calibration"]
+                    self.axis_calibration.update(saved_calibration)
+                    # Update calibration step based on how complete it is
+                    if self.is_calibrated():
+                        self.calibration_step = 4
+                        self.calibration_status.config(text="Calibration complete! (loaded from file)")
+                        if hasattr(self, 'calibration_btn'):
+                            self.calibration_btn.config(state=tk.DISABLED)
+                
+                # Restore selected points from raw coordinates FIRST
+                points_loaded = False
+                if "raw_coordinates" in data:
+                    self.selected_points = data["raw_coordinates"]
+                    points_loaded = True
+                    if hasattr(self, 'points_tree'):
+                        self.update_points_tree()
+                    self.display_image_on_canvas()
+                    print(f"Loaded {len(self.selected_points)} existing points from saved data")
+                
+                # Only auto-populate points if calibration exists AND no points were loaded
+                if self.is_calibrated() and not points_loaded:
+                    print("Calibration loaded but no points exist - auto-populating survival coordinates")
+                    self.auto_populate_survival_coordinates()
+                elif self.is_calibrated() and points_loaded:
+                    print("Calibration and points loaded - preserving existing points, no auto-population")
+                
+                # Restore status and error information if saved
+                if "status" in data:
+                    print(f"Loaded status '{data['status']}' for {base_name}")
+                if "error" in data:
+                    print(f"Loaded error info for {base_name}: {data['error']}")
+                
+            # Note: Metadata groups will be loaded by load_metadata() if no saved groups exist
+                
+        except Exception as e:
+            print(f"Failed to load extraction data for {base_name}: {e}")
+            # Note: Metadata groups will be loaded by load_metadata() as fallback
+    
+    def get_current_timestamp(self):
+        """Get current timestamp in ISO format"""
+        from datetime import datetime
+        return datetime.now().isoformat()
+    
+    def is_calibrated(self):
+        """Check if axis calibration is complete"""
+        cal = self.axis_calibration
+        return all(val is not None for val in [
+            cal['x_min'], cal['x_max'], cal['y_min'], cal['y_max'],
+            cal['x_min_coord'], cal['x_max_coord'], cal['y_min_coord'], cal['y_max_coord']
+        ])
+    
+    def pixel_to_real_x(self, pixel_x):
+        """Convert pixel X coordinate to real X axis value"""
+        if not self.is_calibrated():
+            return None
+            
+        x_min_coord = self.axis_calibration['x_min_coord'][0]  # x coordinate of min point
+        x_max_coord = self.axis_calibration['x_max_coord'][0]  # x coordinate of max point
+        x_min_val = self.axis_calibration['x_min']
+        x_max_val = self.axis_calibration['x_max']
+        
+        # Linear interpolation
+        x_range = x_max_val - x_min_val
+        pixel_x_range = x_max_coord - x_min_coord
+        
+        if pixel_x_range == 0:
+            return x_min_val
+            
+        ratio = (pixel_x - x_min_coord) / pixel_x_range
+        real_x = x_min_val + (ratio * x_range)
+        
+        return real_x
+    
+    def toggle_zoom_panel(self):
+        """Toggle zoom panel visibility"""
+        if self.zoom_panel_visible.get():
+            # Store current position before hiding
+            self.zoom_panel_last_x = self.zoom_panel.winfo_x()
+            self.zoom_panel_last_y = self.zoom_panel.winfo_y()
+            self.zoom_panel.place_forget()
+            self.zoom_panel_visible.set(False)
+        else:
+            # Restore to last position, or default if first time
+            x = getattr(self, 'zoom_panel_last_x', 10)
+            y = getattr(self, 'zoom_panel_last_y', 10)
+            self.zoom_panel.place(x=x, y=y)
+            self.zoom_panel_visible.set(True)
+    
+    def zoom_in(self):
+        """Zoom in on the image"""
+        self.zoom_level = min(self.zoom_level * 1.25, 5.0)  # Max 5x zoom
+        self.update_zoom()
+    
+    def zoom_out(self):
+        """Zoom out on the image"""
+        self.zoom_level = max(self.zoom_level * 0.8, 0.1)  # Min 0.1x zoom
+        self.update_zoom()
+    
+    def reset_zoom(self):
+        """Reset zoom to fit image"""
+        self.zoom_level = 1.0
+        self.update_zoom()
+    
+    def update_zoom(self):
+        """Update the image display with current zoom level"""
+        self.zoom_label.config(text=f"{int(self.zoom_level * 100)}%")
+        if self.original_image:
+            # Store current scroll position to maintain view
+            x_view = self.canvas.canvasx(self.canvas.winfo_width() / 2)
+            y_view = self.canvas.canvasy(self.canvas.winfo_height() / 2)
+            
+            self.display_image_on_canvas()
+            
+            # If zoomed, try to keep the same region in view
+            if self.zoom_level > 1.0:
+                # Center the view on the previously centered area
+                canvas_width = self.canvas.winfo_width()
+                canvas_height = self.canvas.winfo_height()
+                scroll_region = self.canvas.cget('scrollregion').split()
+                if len(scroll_region) == 4:
+                    total_width = float(scroll_region[2])
+                    total_height = float(scroll_region[3])
+                    
+                    # Calculate fraction positions to maintain view
+                    x_fraction = x_view / total_width if total_width > 0 else 0.5
+                    y_fraction = y_view / total_height if total_height > 0 else 0.5
+                    
+                    # Apply the scroll position
+                    self.canvas.xview_moveto(max(0, x_fraction - 0.5))
+                    self.canvas.yview_moveto(max(0, y_fraction - 0.5))
+    
+    def on_canvas_release(self, event):
+        """Handle mouse button release"""
+        # Handle calibration point release
+        if self.dragging_point:
+            self.dragging_point = None
+    
+    def on_mouse_wheel(self, event):
+        """Handle mouse wheel for zooming"""
+        if event.delta > 0 or event.num == 4:  # Zoom in
+            self.zoom_in()
+        elif event.delta < 0 or event.num == 5:  # Zoom out
+            self.zoom_out()
+    
+    def on_canvas_configure(self, event):
+        """Handle canvas resize to update scrollbar visibility"""
+        if self.original_image and hasattr(self, 'canvas_image'):
+            # Get current image dimensions
+            img_width, img_height = self.original_image.size
+            
+            # Apply current zoom level
+            base_scale = min((self.canvas.winfo_width() - 50) / img_width,
+                           (self.canvas.winfo_height() - 50) / img_height, 1.0)
+            scale_factor = base_scale * self.zoom_level
+            
+            new_width = int(img_width * scale_factor)
+            new_height = int(img_height * scale_factor)
+            
+            # Update scrollbars based on new canvas size
+            self.update_scrollbars(new_width, new_height)
+    
+    def hide_initial_scrollbars(self):
+        """Hide scrollbars initially when no image is loaded"""
+        if hasattr(self, 'v_scrollbar') and hasattr(self, 'h_scrollbar'):
+            self.v_scrollbar.grid_remove()
+            self.h_scrollbar.grid_remove()
+
     def on_closing(self):
         """Handle application closing"""
+        # Auto-save final state before closing
+        self.auto_save_current_state()
+        
         if self.zoom_window:
             self.zoom_window.destroy()
         self.root.destroy()
