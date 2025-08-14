@@ -4,6 +4,12 @@ __pycache__/
 *$py.class
 data/
 extraction_data/
+
+# PyInstaller
+build/
+dist/
+*.spec
+!survival_curve_extractor.spec
 # C extensions
 *.so
 
