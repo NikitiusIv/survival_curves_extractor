@@ -1,0 +1,14 @@
+[tool.poetry]
+name = "survival-curve-extractor"
+version = "0.1.0"
+description = "Tool for extracting survival curve data from images using pure Python"
+authors = ["User <user@example.com>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pillow = "^10.0.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
