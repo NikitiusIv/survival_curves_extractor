@@ -2,18 +2,37 @@
 
 A Python-based tool for extracting time-point data from survival curve images. This application provides an intuitive interface for digitizing survival curve plots and extracting precise time values at specific survival rate thresholds.
 
+## 📚 Documentation
+
+- **[Quick Start Guide](QUICK_START.md)** - Get up and running in 5 minutes
+- **[User Guide](USER_GUIDE.md)** - Comprehensive guide for non-technical users
+- **[Visual Tutorial](VISUAL_TUTORIAL.md)** - Step-by-step with screenshots
+- **[FAQ](FAQ.md)** - Common questions and troubleshooting
+- **[Distribution Guide](DISTRIBUTION.md)** - How to build and distribute the app
+
 ## Features
 
-- **Image Loading**: Load survival curve images from files or browse folders
-- **Axis Calibration**: Point-and-click calibration for accurate coordinate mapping
-- **Dynamic Group Management**: Add and manage experimental groups with scrollable interface
-- **Interactive Point Selection**: Table-based point selection with click-to-set functionality
-- **Real-time Editing**: Double-click to edit time values with automatic marker repositioning
-- **Data Export**: Export extracted data to JSON format with metadata
-- **Zoom Functionality**: Optional zoom window for precise point placement
-- **Resizable Interface**: Draggable column borders for customizable workspace
+- **Dataset Navigation**: Load and navigate through entire datasets of survival curve images
+- **Axis Calibration**: Point-and-click calibration with zoom window for precision
+- **Auto-Population**: Automatic creation of survival percentage guidelines (0%, 25%, 50%, 75%, 100%)
+- **Status Tracking**: Mark images as Done/Error with visual indicators (✓/✗/○)
+- **Progress Monitoring**: Real-time progress bar and completion statistics
+- **Smart Filtering**: "Show only incomplete" option to focus on unfinished work
+- **Auto-Save**: All changes saved automatically - no data loss
+- **Enhanced Zoom**: Zoom window with survival percentage guidelines for precise clicking
+- **Group Management**: Dynamic management of experimental groups from metadata
+- **Cross-Platform**: Standalone executables for Windows and macOS
 
-## Installation
+## 🚀 Download Ready-to-Use Application
+
+### For Non-Technical Users
+Download the pre-built application from the [Releases](https://github.com/NikitiusIv/survival_curves_extractor/releases) page:
+- **Windows**: `SurvivalCurveExtractor-Windows-x64.zip`
+- **macOS**: `SurvivalCurveExtractor-macOS-arm64.zip` (M1/M2) or `-x64.zip` (Intel)
+
+See the [Quick Start Guide](QUICK_START.md) for installation instructions.
+
+## 🛠️ Installation (For Developers)
 
 ### Requirements
 
@@ -42,19 +61,19 @@ python main.py
 
 ### Workflow
 
-1. **Load Image**: Select a survival curve image file
+1. **Load Dataset**: Click "Select Dataset" and choose your `extraction_data` folder
 2. **Calibrate Axes**: 
-   - Click on X-axis minimum and maximum points
-   - Enter corresponding values
-   - Click on Y-axis minimum and maximum points
-   - Enter corresponding values
-3. **Set Groups**: Add experimental group names (WT, KO, HT, etc.)
-4. **Extract Points**:
-   - All possible group-survival rate combinations are auto-populated in the table
-   - Select any row in the table
-   - Click on the corresponding point in the image
-   - Repeat for all desired points
-5. **Export Data**: Save extracted time values to JSON format
+   - Enter axis min/max values (e.g., X: 0-30, Y: 0-100)
+   - Click "Start Calibration"
+   - Click 4 points on the image following the prompts
+3. **Extract Points**:
+   - Survival lines appear automatically after calibration
+   - Click where curves intersect the percentage lines
+   - Points are auto-saved as you work
+4. **Complete Image**: 
+   - Click "Done" when finished
+   - Use navigation arrows to move to next image
+5. **Track Progress**: Monitor completion with progress bar and status indicators
 
 ### Key Features
 
