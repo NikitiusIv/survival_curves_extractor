@@ -1,0 +1,51 @@
+name: Build Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        python-version: ['3.9', '3.11']
+        
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Install Poetry
+        run: |
+          pip install poetry
+          poetry config virtualenvs.in-project true
+      
+      - name: Install dependencies
+        run: poetry install
+      
+      - name: Run tests (if any)
+        run: poetry run python -c "print('No tests yet')"
+      
+      - name: Build executable
+        run: poetry run python build.py
+      
+      - name: Check build output
+        shell: bash
+        run: |
+          ls -la dist/
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            test -f dist/SurvivalCurveExtractor.exe || exit 1
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            test -d dist/SurvivalCurveExtractor.app || exit 1
+          else
+            test -f dist/SurvivalCurveExtractor || exit 1
+          fi
