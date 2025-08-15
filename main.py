@@ -141,6 +141,18 @@ class SurvivalCurveExtractor:
         style.configure('Treeview.Heading', background=self.colors['bg_dark'], foreground=self.colors['text'])
         style.map('Treeview', background=[('selected', self.colors['select_bg'])],
                   foreground=[('selected', self.colors['select_fg'])])
+    
+    def create_button(self, parent, text, command=None, width=None, state=None):
+        """Create a styled button with consistent dark theme"""
+        btn = tk.Button(parent, text=text, command=command,
+                       bg=self.colors['button_bg'], fg=self.colors['text'],
+                       activebackground='#4a4a4a', activeforeground='white',
+                       relief=tk.RAISED, bd=1)
+        if width:
+            btn.config(width=width)
+        if state:
+            btn.config(state=state)
+        return btn
         
     def setup_ui(self):
         """Setup the user interface"""
@@ -256,7 +268,7 @@ class SurvivalCurveExtractor:
         
         ttk.Label(dataset_frame, text="Dataset:").pack(side=tk.LEFT, padx=(0, 5))
         
-        ttk.Button(dataset_frame, text="Select Dataset Folder", command=self.select_dataset).pack(side=tk.LEFT, padx=(0, 10))
+        self.create_button(dataset_frame, text="Select Dataset Folder", command=self.select_dataset).pack(side=tk.LEFT, padx=(0, 10))
         
         self.dataset_label = ttk.Label(dataset_frame, text="No dataset selected", foreground="#999999")
         self.dataset_label.pack(side=tk.LEFT, padx=(0, 20))
@@ -285,13 +297,13 @@ class SurvivalCurveExtractor:
         nav_buttons = ttk.Frame(nav_controls)
         nav_buttons.pack(side=tk.LEFT, padx=(10, 0))
         
-        self.prev_btn = ttk.Button(nav_buttons, text="◀ Previous", command=self.prev_image, state=tk.DISABLED)
+        self.prev_btn = self.create_button(nav_buttons, text="◀ Previous", command=self.prev_image, state=tk.DISABLED)
         self.prev_btn.pack(side=tk.LEFT, padx=(0, 5))
         
         self.image_counter_label = ttk.Label(nav_buttons, text="0 of 0 ○")
         self.image_counter_label.pack(side=tk.LEFT, padx=(0, 5))
         
-        self.next_btn = ttk.Button(nav_buttons, text="Next ▶", command=self.next_image, state=tk.DISABLED)
+        self.next_btn = self.create_button(nav_buttons, text="Next ▶", command=self.next_image, state=tk.DISABLED)
         self.next_btn.pack(side=tk.LEFT)
         
         # Current file display
@@ -343,7 +355,7 @@ class SurvivalCurveExtractor:
         control_frame.pack(padx=5, pady=(0, 5))
         
         # Toggle zoom panel button
-        toggle_btn = ttk.Button(control_frame, text="👁", width=3,
+        toggle_btn = self.create_button(control_frame, text="👁", width=3,
                                command=self.toggle_zoom_panel)
         toggle_btn.pack(side=tk.LEFT, padx=2)
         
@@ -353,19 +365,19 @@ class SurvivalCurveExtractor:
         
         ttk.Label(zoom_frame, text="Zoom:", font=('Arial', 8)).pack(side=tk.LEFT)
         
-        zoom_out_btn = ttk.Button(zoom_frame, text="−", width=3,
+        zoom_out_btn = self.create_button(zoom_frame, text="−", width=3,
                                  command=self.zoom_out)
         zoom_out_btn.pack(side=tk.LEFT, padx=1)
         
         self.zoom_label = ttk.Label(zoom_frame, text="100%", font=('Arial', 8), width=5)
         self.zoom_label.pack(side=tk.LEFT, padx=2)
         
-        zoom_in_btn = ttk.Button(zoom_frame, text="+", width=3,
+        zoom_in_btn = self.create_button(zoom_frame, text="+", width=3,
                                 command=self.zoom_in)
         zoom_in_btn.pack(side=tk.LEFT, padx=1)
         
         # Reset zoom button
-        reset_btn = ttk.Button(control_frame, text="⌂", width=3,
+        reset_btn = self.create_button(control_frame, text="⌂", width=3,
                               command=self.reset_zoom)
         reset_btn.pack(side=tk.LEFT, padx=2)
         
@@ -485,10 +497,10 @@ class SurvivalCurveExtractor:
         self.calibration_value = ttk.Entry(input_frame)
         self.calibration_value.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
         
-        self.calibration_btn = ttk.Button(input_frame, text="Set", width=3, command=self.set_calibration_point, state=tk.DISABLED)
+        self.calibration_btn = self.create_button(input_frame, text="Set", width=3, command=self.set_calibration_point, state=tk.DISABLED)
         self.calibration_btn.pack(side=tk.LEFT)
         
-        ttk.Button(frame, text="Reset Calibration", command=self.reset_calibration).pack(fill=tk.X, pady=2)
+        self.create_button(frame, text="Reset Calibration", command=self.reset_calibration).pack(fill=tk.X, pady=2)
         
         
         # Zoom control
@@ -544,9 +556,9 @@ class SurvivalCurveExtractor:
         button_frame = ttk.Frame(frame)
         button_frame.pack(fill=tk.X, pady=3)
         
-        ttk.Button(button_frame, text="+", width=2, command=self.add_group_field).pack(side=tk.LEFT, padx=(0, 1))
-        ttk.Button(button_frame, text="Upd", width=3, command=self.update_groups).pack(side=tk.LEFT, padx=1)
-        ttk.Button(button_frame, text="Clr", width=3, command=self.clear_all_groups).pack(side=tk.LEFT, padx=1)
+        self.create_button(button_frame, text="+", width=2, command=self.add_group_field).pack(side=tk.LEFT, padx=(0, 1))
+        self.create_button(button_frame, text="Upd", width=3, command=self.update_groups).pack(side=tk.LEFT, padx=1)
+        self.create_button(button_frame, text="Clr", width=3, command=self.clear_all_groups).pack(side=tk.LEFT, padx=1)
         
         self.groups_parent = frame.master
         
@@ -620,11 +632,11 @@ class SurvivalCurveExtractor:
         frame.pack(fill=tk.X, pady=(0, 10))
         
         # Create dynamic Done/Undone button (will be updated based on status)
-        self.done_undone_btn = ttk.Button(frame, text="Done", command=self.toggle_done_status)
+        self.done_undone_btn = self.create_button(frame, text="Done", command=self.toggle_done_status)
         self.done_undone_btn.pack(fill=tk.X, pady=2)
         
-        ttk.Button(frame, text="Report Error", command=self.report_error).pack(fill=tk.X, pady=2)
-        ttk.Button(frame, text="View Data", command=self.view_data).pack(fill=tk.X, pady=2)
+        self.create_button(frame, text="Report Error", command=self.report_error).pack(fill=tk.X, pady=2)
+        self.create_button(frame, text="View Data", command=self.view_data).pack(fill=tk.X, pady=2)
         
         self.export_status = ttk.Label(frame, text="Ready to mark image as complete", foreground="#ffd700")
         self.export_status.pack(fill=tk.X, pady=5)
@@ -691,7 +703,7 @@ class SurvivalCurveExtractor:
                 self.load_image_file(selected_file)
                 dialog.destroy()
                 
-        ttk.Button(dialog, text="Load Selected", command=on_select).pack(pady=10)
+        self.create_button(dialog, text="Load Selected", command=on_select).pack(pady=10)
         
     def load_image_file(self, file_path):
         """Load and display image file"""
@@ -1675,7 +1687,7 @@ class SurvivalCurveExtractor:
         entry.bind('<KeyRelease>', lambda e: self.update_groups())
         
         # Delete button
-        delete_btn = ttk.Button(group_frame, text="×", width=2, 
+        delete_btn = self.create_button(group_frame, text="×", width=2, 
                                command=lambda: self.remove_group_field(group_frame, entry))
         delete_btn.pack(side=tk.LEFT)
         
@@ -1709,7 +1721,7 @@ class SurvivalCurveExtractor:
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         
         # Delete button
-        delete_btn = ttk.Button(group_frame, text="×", width=2, 
+        delete_btn = self.create_button(group_frame, text="×", width=2, 
                                command=lambda: self.remove_group_field(group_frame, entry))
         delete_btn.pack(side=tk.LEFT)
         
