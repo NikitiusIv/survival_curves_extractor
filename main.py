@@ -195,26 +195,29 @@ class SurvivalCurveExtractor:
             btn_frame.bind('<Enter>', on_enter)
             btn_frame.bind('<Leave>', on_leave)
             
+            # Store original config method before overriding
+            original_config = btn_frame.config
+            
             # Add config method to mimic tk.Button API
             def config_method(**kwargs):
                 if 'state' in kwargs:
                     if kwargs['state'] == tk.DISABLED:
                         btn_label.config(fg='#666666', cursor='')
-                        btn_frame.config(bg='#2a2a2a')
+                        original_config(bg='#2a2a2a')
                         btn_label.config(bg='#2a2a2a')
                     else:
                         btn_label.config(fg=self.colors['text'], cursor='hand2')
-                        btn_frame.config(bg=self.colors['button_bg'])
+                        original_config(bg=self.colors['button_bg'])
                         btn_label.config(bg=self.colors['button_bg'])
                 if 'width' in kwargs:
-                    btn_frame.config(width=kwargs['width'] * 8)  # Approximate character width
+                    original_config(width=kwargs['width'] * 8)  # Approximate character width
                 if 'text' in kwargs:
                     btn_label.config(text=kwargs['text'])
                     
             btn_frame.config = config_method
             
             if width:
-                btn_frame.config(width=width * 8)  # Approximate character width
+                original_config(width=width * 8)  # Approximate character width
             if state == tk.DISABLED:
                 btn_frame.config(state=tk.DISABLED)
                 
