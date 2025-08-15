@@ -152,48 +152,108 @@ class SurvivalCurveExtractor:
         """Create a styled button with consistent dark theme"""
         import platform
         
-        # Create button with explicit styling for cross-platform consistency
-        btn = tk.Button(parent, text=text, command=command,
-                       bg=self.colors['button_bg'], fg=self.colors['text'],
-                       activebackground='#4a4a4a', activeforeground='white',
-                       relief=tk.RAISED, bd=1,
-                       highlightthickness=0,  # Remove highlight border
-                       font=('Arial', 11))    # Explicit font
-        
-        # Platform-specific adjustments
-        if platform.system() == 'Darwin':  # macOS
-            btn.config(
-                highlightbackground=self.colors['button_bg'],  # macOS specific
-                highlightcolor=self.colors['button_bg'],
-                borderwidth=1,
-                relief=tk.RAISED
-            )
-        
-        if width:
-            btn.config(width=width)
-        if state:
-            btn.config(state=state)
+        if platform.system() == 'Darwin':  # macOS - use Frame-based button
+            # Create a frame that looks like a button for macOS
+            btn_frame = tk.Frame(parent, bg=self.colors['button_bg'], relief=tk.RAISED, bd=1)
+            btn_frame.pack_propagate(False)  # Don't let contents control size
             
-        return btn
+            # Create label inside frame
+            btn_label = tk.Label(btn_frame, text=text, 
+                               bg=self.colors['button_bg'], fg=self.colors['text'],
+                               font=('Arial', 11, 'normal'),
+                               cursor='hand2')
+            btn_label.pack(expand=True, fill=tk.BOTH, padx=4, pady=2)
+            
+            # Store the command and other properties
+            btn_frame.command = command
+            btn_frame.btn_label = btn_label
+            
+            # Add click behavior
+            def on_click(event):
+                if command and btn_frame.winfo_exists():
+                    # Visual feedback
+                    btn_frame.config(relief=tk.SUNKEN)
+                    btn_label.config(bg='#4a4a4a')
+                    btn_frame.after(100, lambda: (
+                        btn_frame.config(relief=tk.RAISED),
+                        btn_label.config(bg=self.colors['button_bg'])
+                    ) if btn_frame.winfo_exists() else None)
+                    command()
+            
+            def on_enter(event):
+                if btn_frame.winfo_exists():
+                    btn_label.config(bg='#4a4a4a')
+                    
+            def on_leave(event):
+                if btn_frame.winfo_exists():
+                    btn_label.config(bg=self.colors['button_bg'])
+            
+            btn_label.bind('<Button-1>', on_click)
+            btn_label.bind('<Enter>', on_enter)
+            btn_label.bind('<Leave>', on_leave)
+            btn_frame.bind('<Button-1>', on_click)
+            btn_frame.bind('<Enter>', on_enter)
+            btn_frame.bind('<Leave>', on_leave)
+            
+            # Add config method to mimic tk.Button API
+            def config_method(**kwargs):
+                if 'state' in kwargs:
+                    if kwargs['state'] == tk.DISABLED:
+                        btn_label.config(fg='#666666', cursor='')
+                        btn_frame.config(bg='#2a2a2a')
+                        btn_label.config(bg='#2a2a2a')
+                    else:
+                        btn_label.config(fg=self.colors['text'], cursor='hand2')
+                        btn_frame.config(bg=self.colors['button_bg'])
+                        btn_label.config(bg=self.colors['button_bg'])
+                if 'width' in kwargs:
+                    btn_frame.config(width=kwargs['width'] * 8)  # Approximate character width
+                if 'text' in kwargs:
+                    btn_label.config(text=kwargs['text'])
+                    
+            btn_frame.config = config_method
+            
+            if width:
+                btn_frame.config(width=width * 8)  # Approximate character width
+            if state == tk.DISABLED:
+                btn_frame.config(state=tk.DISABLED)
+                
+            return btn_frame
+            
+        else:  # Windows and Linux - use regular tk.Button
+            btn = tk.Button(parent, text=text, command=command,
+                           bg=self.colors['button_bg'], fg=self.colors['text'],
+                           activebackground='#4a4a4a', activeforeground='white',
+                           relief=tk.RAISED, bd=1,
+                           highlightthickness=0,
+                           font=('Arial', 11))
+            
+            if width:
+                btn.config(width=width)
+            if state:
+                btn.config(state=state)
+                
+            return btn
     
     def maintain_button_styling(self):
-        """Maintain button styling across all buttons"""
-        # Find all tk.Button widgets and reapply styling
-        def apply_to_buttons(widget):
-            try:
-                for child in widget.winfo_children():
-                    if isinstance(child, tk.Button):
-                        child.config(
-                            bg=self.colors['button_bg'], 
-                            fg=self.colors['text'],
-                            activebackground='#4a4a4a', 
-                            activeforeground='white',
-                            highlightbackground=self.colors['button_bg']
-                        )
-                    apply_to_buttons(child)
-            except:
-                pass
-        apply_to_buttons(self.root)
+        """Maintain button styling across all buttons (mainly for Windows/Linux)"""
+        import platform
+        if platform.system() != 'Darwin':  # Only needed for non-macOS
+            def apply_to_buttons(widget):
+                try:
+                    for child in widget.winfo_children():
+                        if isinstance(child, tk.Button):
+                            child.config(
+                                bg=self.colors['button_bg'], 
+                                fg=self.colors['text'],
+                                activebackground='#4a4a4a', 
+                                activeforeground='white',
+                                highlightbackground=self.colors['button_bg']
+                            )
+                        apply_to_buttons(child)
+                except:
+                    pass
+            apply_to_buttons(self.root)
         
     def setup_ui(self):
         """Setup the user interface"""
