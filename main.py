@@ -155,37 +155,40 @@ class SurvivalCurveExtractor:
         if platform.system() == 'Darwin':  # macOS - use Frame-based button
             # Create a frame that looks like a button for macOS
             btn_frame = tk.Frame(parent, bg=self.colors['button_bg'], relief=tk.RAISED, bd=1)
-            btn_frame.pack_propagate(False)  # Don't let contents control size
             
             # Create label inside frame
             btn_label = tk.Label(btn_frame, text=text, 
                                bg=self.colors['button_bg'], fg=self.colors['text'],
                                font=('Arial', 11, 'normal'),
                                cursor='hand2')
-            btn_label.pack(expand=True, fill=tk.BOTH, padx=4, pady=2)
+            btn_label.pack(padx=6, pady=4)
             
             # Store the command and other properties
             btn_frame.command = command
             btn_frame.btn_label = btn_label
+            btn_frame.is_enabled = True  # Track button state
             
             # Add click behavior
             def on_click(event):
-                if command and btn_frame.winfo_exists():
+                if command and btn_frame.winfo_exists() and getattr(btn_frame, 'is_enabled', True):
                     # Visual feedback
-                    btn_frame.config(relief=tk.SUNKEN)
+                    btn_frame.configure(relief=tk.SUNKEN)
                     btn_label.config(bg='#4a4a4a')
                     btn_frame.after(100, lambda: (
-                        btn_frame.config(relief=tk.RAISED),
+                        btn_frame.configure(relief=tk.RAISED),
                         btn_label.config(bg=self.colors['button_bg'])
                     ) if btn_frame.winfo_exists() else None)
-                    command()
+                    try:
+                        command()
+                    except Exception as e:
+                        print(f"Button command error: {e}")
             
             def on_enter(event):
-                if btn_frame.winfo_exists():
+                if btn_frame.winfo_exists() and getattr(btn_frame, 'is_enabled', True):
                     btn_label.config(bg='#4a4a4a')
                     
             def on_leave(event):
-                if btn_frame.winfo_exists():
+                if btn_frame.winfo_exists() and getattr(btn_frame, 'is_enabled', True):
                     btn_label.config(bg=self.colors['button_bg'])
             
             btn_label.bind('<Button-1>', on_click)
@@ -195,31 +198,31 @@ class SurvivalCurveExtractor:
             btn_frame.bind('<Enter>', on_enter)
             btn_frame.bind('<Leave>', on_leave)
             
-            # Store original config method before overriding
-            original_config = btn_frame.config
-            
-            # Add config method to mimic tk.Button API
+            # Add simple config method to mimic tk.Button API
             def config_method(**kwargs):
                 if 'state' in kwargs:
                     if kwargs['state'] == tk.DISABLED:
+                        btn_frame.is_enabled = False
                         btn_label.config(fg='#666666', cursor='')
-                        original_config(bg='#2a2a2a')
+                        btn_frame.configure(bg='#2a2a2a')
                         btn_label.config(bg='#2a2a2a')
-                    else:
+                    else:  # NORMAL or other enabled state
+                        btn_frame.is_enabled = True
                         btn_label.config(fg=self.colors['text'], cursor='hand2')
-                        original_config(bg=self.colors['button_bg'])
+                        btn_frame.configure(bg=self.colors['button_bg'])
                         btn_label.config(bg=self.colors['button_bg'])
-                if 'width' in kwargs:
-                    original_config(width=kwargs['width'] * 8)  # Approximate character width
                 if 'text' in kwargs:
                     btn_label.config(text=kwargs['text'])
                     
             btn_frame.config = config_method
             
             if width:
-                original_config(width=width * 8)  # Approximate character width
+                btn_frame.configure(width=width * 8)  # Approximate character width
             if state == tk.DISABLED:
                 btn_frame.config(state=tk.DISABLED)
+            else:
+                # Ensure button starts in enabled state
+                btn_frame.is_enabled = True
                 
             return btn_frame
             
@@ -2038,14 +2041,14 @@ class SurvivalCurveExtractor:
         if folder_path:
             extraction_path = Path(folder_path)
             png_path = extraction_path / "png"
-            metadata_path = extraction_path / "metatdata"  # Note: typo in original folder name
+            metadata_path = extraction_path / "metadata"
             
             if png_path.exists() and metadata_path.exists():
                 self.dataset_path = extraction_path
                 self.load_dataset()
             else:
                 messagebox.showerror("Invalid Dataset", 
-                    "Selected folder must contain 'png' and 'metatdata' subfolders")
+                    "Selected folder must contain 'png' and 'metadata' subfolders")
     
     def load_dataset(self):
         """Load all images from the dataset"""
@@ -2121,7 +2124,7 @@ class SurvivalCurveExtractor:
     
     def load_metadata(self, base_name):
         """Load metadata for the current image and auto-populate groups"""
-        metadata_path = self.dataset_path / "metatdata" / f"{base_name}.json"
+        metadata_path = self.dataset_path / "metadata" / f"{base_name}.json"
         
         if metadata_path.exists():
             try:
