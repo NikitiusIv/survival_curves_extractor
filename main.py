@@ -72,7 +72,7 @@ class SurvivalCurveExtractor:
         self.filtered_image_files = None  # For filtering incomplete images
         self.current_index = 0
         self.metadata_cache = {}
-        self.metadata_groups = []  # Store metadata groups for fallback
+        # Removed metadata_groups fallback - now only use current image's data
         self.auto_save_enabled = True
         self.ui_refreshing = False  # Flag to prevent auto-population during UI refresh
         
@@ -161,7 +161,7 @@ class SurvivalCurveExtractor:
                                bg=self.colors['button_bg'], fg=self.colors['text'],
                                font=('Arial', 11, 'normal'),
                                cursor='hand2')
-            btn_label.pack(padx=6, pady=4)
+            btn_label.pack(expand=True, fill=tk.BOTH, padx=6, pady=4)
             
             # Store the command and other properties
             btn_frame.command = command
@@ -170,7 +170,7 @@ class SurvivalCurveExtractor:
             
             # Add click behavior
             def on_click(event):
-                if command and btn_frame.winfo_exists() and getattr(btn_frame, 'is_enabled', True):
+                if btn_frame.winfo_exists() and getattr(btn_frame, 'is_enabled', True):
                     # Visual feedback
                     btn_frame.configure(relief=tk.SUNKEN)
                     btn_label.config(bg='#4a4a4a')
@@ -178,10 +178,12 @@ class SurvivalCurveExtractor:
                         btn_frame.configure(relief=tk.RAISED),
                         btn_label.config(bg=self.colors['button_bg'])
                     ) if btn_frame.winfo_exists() else None)
-                    try:
-                        command()
-                    except Exception as e:
-                        print(f"Button command error: {e}")
+                    # Execute command if provided
+                    if command:
+                        try:
+                            command()
+                        except Exception as e:
+                            print(f"Button command error: {e}")
             
             def on_enter(event):
                 if btn_frame.winfo_exists() and getattr(btn_frame, 'is_enabled', True):
@@ -191,12 +193,12 @@ class SurvivalCurveExtractor:
                 if btn_frame.winfo_exists() and getattr(btn_frame, 'is_enabled', True):
                     btn_label.config(bg=self.colors['button_bg'])
             
-            btn_label.bind('<Button-1>', on_click)
-            btn_label.bind('<Enter>', on_enter)
-            btn_label.bind('<Leave>', on_leave)
-            btn_frame.bind('<Button-1>', on_click)
-            btn_frame.bind('<Enter>', on_enter)
-            btn_frame.bind('<Leave>', on_leave)
+            # Bind events to both frame and label for better reliability
+            for widget in [btn_frame, btn_label]:
+                widget.bind('<Button-1>', on_click)
+                widget.bind('<Enter>', on_enter)
+                widget.bind('<Leave>', on_leave)
+                widget.bind('<ButtonRelease-1>', lambda e: None)  # Consume event
             
             # Add simple config method to mimic tk.Button API
             def config_method(**kwargs):
@@ -438,144 +440,33 @@ class SurvivalCurveExtractor:
         self.description_text.configure(yscrollcommand=desc_scrollbar.set)
     
     def setup_zoom_pan_controls(self, parent):
-        """Setup zoom and pan controls in top-right corner"""
-        # Create zoom panel frame positioned absolutely in top-right
-        self.zoom_panel = ttk.Frame(parent, relief='raised', borderwidth=2)
-        self.zoom_panel.place(x=10, y=10, anchor='nw')
-        
-        # Panel visibility toggle
-        self.zoom_panel_visible = tk.BooleanVar(value=True)
-        
-        # Title bar for dragging
-        title_frame = ttk.Frame(self.zoom_panel)
-        title_frame.pack(fill=tk.X, padx=2, pady=2)
-        
-        title_label = ttk.Label(title_frame, text="🔍 Zoom Controls", font=('Arial', 8, 'bold'))
-        title_label.pack(side=tk.LEFT)
-        
-        # Drag handle indicator
-        drag_label = ttk.Label(title_frame, text="⋮⋮", font=('Arial', 6))
-        drag_label.pack(side=tk.RIGHT)
-        
-        # Control buttons frame
-        control_frame = ttk.Frame(self.zoom_panel)
-        control_frame.pack(padx=5, pady=(0, 5))
-        
-        # Toggle zoom panel button
-        toggle_btn = self.create_button(control_frame, text="👁", width=3,
-                               command=self.toggle_zoom_panel)
-        toggle_btn.pack(side=tk.LEFT, padx=2)
-        
-        # Zoom controls
-        zoom_frame = ttk.Frame(control_frame)
-        zoom_frame.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(zoom_frame, text="Zoom:", font=('Arial', 8)).pack(side=tk.LEFT)
-        
-        zoom_out_btn = self.create_button(zoom_frame, text="−", width=3,
-                                 command=self.zoom_out)
-        zoom_out_btn.pack(side=tk.LEFT, padx=1)
-        
-        self.zoom_label = ttk.Label(zoom_frame, text="100%", font=('Arial', 8), width=5)
-        self.zoom_label.pack(side=tk.LEFT, padx=2)
-        
-        zoom_in_btn = self.create_button(zoom_frame, text="+", width=3,
-                                command=self.zoom_in)
-        zoom_in_btn.pack(side=tk.LEFT, padx=1)
-        
-        # Reset zoom button
-        reset_btn = self.create_button(control_frame, text="⌂", width=3,
-                              command=self.reset_zoom)
-        reset_btn.pack(side=tk.LEFT, padx=2)
-        
-        # Initialize zoom variables
+        """Setup simple zoom controls in bottom-right corner"""
+        # Initialize zoom level
         self.zoom_level = 1.0
         
-        # Make zoom panel draggable
-        self.root.after(100, self.setup_draggable_panel)  # Delay to ensure widgets are created
+        # Create zoom control frame in bottom-right
+        self.zoom_frame = ttk.Frame(parent, relief='raised', borderwidth=1)
+        self.zoom_frame.place(relx=1.0, rely=1.0, anchor='se', x=-10, y=-10)
+        
+        # Zoom out button
+        self.zoom_out_btn = ttk.Button(self.zoom_frame, text="−", width=3,
+                                     command=self.zoom_out)
+        self.zoom_out_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Zoom label
+        self.zoom_label = ttk.Label(self.zoom_frame, text="100%", font=('Arial', 10), width=5)
+        self.zoom_label.pack(side=tk.LEFT, padx=5)
+        
+        # Zoom in button
+        self.zoom_in_btn = ttk.Button(self.zoom_frame, text="+", width=3,
+                                    command=self.zoom_in)
+        self.zoom_in_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Reset zoom button
+        self.reset_btn = ttk.Button(self.zoom_frame, text="Reset", width=6,
+                                  command=self.reset_zoom)
+        self.reset_btn.pack(side=tk.LEFT, padx=(5, 2))
     
-    def setup_draggable_panel(self):
-        """Make the zoom panel draggable"""
-        self.zoom_panel_drag_data = {"x": 0, "y": 0, "dragging": False}
-        
-        # Bind drag events to the zoom panel and its children
-        self.bind_drag_events(self.zoom_panel)
-        
-        # Also bind to child widgets for better UX
-        for child in self.zoom_panel.winfo_children():
-            self.bind_drag_events_recursive(child)
-    
-    def bind_drag_events(self, widget):
-        """Bind drag events to a widget"""
-        widget.bind('<Button-1>', self.start_drag_zoom_panel)
-        widget.bind('<B1-Motion>', self.on_drag_zoom_panel)
-        widget.bind('<ButtonRelease-1>', self.stop_drag_zoom_panel)
-        
-        # Add cursor change for draggable areas
-        widget.bind('<Enter>', lambda e: widget.configure(cursor='hand2'))
-        widget.bind('<Leave>', lambda e: widget.configure(cursor=''))
-    
-    def bind_drag_events_recursive(self, widget):
-        """Recursively bind drag events to widget and its children"""
-        try:
-            # Skip certain widget types that should handle their own events
-            if isinstance(widget, (tk.Button, ttk.Button, tk.Checkbutton, ttk.Checkbutton)):
-                return
-                
-            self.bind_drag_events(widget)
-            
-            # Recursively bind to children
-            for child in widget.winfo_children():
-                self.bind_drag_events_recursive(child)
-        except:
-            pass  # Handle any widget access errors gracefully
-    
-    def start_drag_zoom_panel(self, event):
-        """Start dragging the zoom panel"""
-        # Don't start drag if clicking on interactive elements
-        if isinstance(event.widget, (tk.Button, ttk.Button, tk.Checkbutton, ttk.Checkbutton)):
-            return
-            
-        self.zoom_panel_drag_data["dragging"] = True
-        self.zoom_panel_drag_data["x"] = event.x_root
-        self.zoom_panel_drag_data["y"] = event.y_root
-    
-    def on_drag_zoom_panel(self, event):
-        """Handle dragging the zoom panel"""
-        if not self.zoom_panel_drag_data["dragging"]:
-            return
-            
-        # Calculate how much the mouse has moved
-        delta_x = event.x_root - self.zoom_panel_drag_data["x"]
-        delta_y = event.y_root - self.zoom_panel_drag_data["y"]
-        
-        # Get current position
-        current_x = self.zoom_panel.winfo_x()
-        current_y = self.zoom_panel.winfo_y()
-        
-        # Calculate new position
-        new_x = current_x + delta_x
-        new_y = current_y + delta_y
-        
-        # Keep panel within parent bounds (with some margin)
-        parent_width = self.zoom_panel.master.winfo_width()
-        parent_height = self.zoom_panel.master.winfo_height()
-        panel_width = self.zoom_panel.winfo_reqwidth()
-        panel_height = self.zoom_panel.winfo_reqheight()
-        
-        new_x = max(0, min(new_x, parent_width - panel_width))
-        new_y = max(0, min(new_y, parent_height - panel_height))
-        
-        # Move the panel
-        self.zoom_panel.place(x=new_x, y=new_y)
-        
-        # Update drag data
-        self.zoom_panel_drag_data["x"] = event.x_root
-        self.zoom_panel_drag_data["y"] = event.y_root
-    
-    def stop_drag_zoom_panel(self, event):
-        """Stop dragging the zoom panel"""
-        self.zoom_panel_drag_data["dragging"] = False
     
     def update_image_description(self, description):
         """Update the image description text"""
@@ -686,8 +577,7 @@ class SurvivalCurveExtractor:
         self.groups_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=3)
         self.groups_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=3)
         
-        # Add initial group field
-        self.add_group_field()
+        # Don't add any initial group field - wait for data or user action
         
     def setup_extraction_controls(self, parent):
         """Setup data extraction controls"""
@@ -833,24 +723,28 @@ class SurvivalCurveExtractor:
             
     def display_image_on_canvas(self):
         """Display image on canvas with proper scaling"""
-        if not self.original_image:
+        if not hasattr(self, 'original_image') or not self.original_image:
             return
             
         # Calculate scale factor to fit canvas
-        canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
+        try:
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+        except:
+            return
         
         if canvas_width <= 1 or canvas_height <= 1:
-            self.root.after(100, self.display_image_on_canvas)
+            # Don't reschedule to avoid infinite loops
             return
             
         img_width, img_height = self.original_image.size
         
+        # Calculate base scale to fit image in canvas
         scale_x = (canvas_width - 50) / img_width
         scale_y = (canvas_height - 50) / img_height
         base_scale = min(scale_x, scale_y, 1.0)  # Don't scale up beyond original
         
-        # Apply zoom level to base scale
+        # Apply zoom level
         if hasattr(self, 'zoom_level'):
             self.scale_factor = base_scale * self.zoom_level
         else:
@@ -875,14 +769,16 @@ class SurvivalCurveExtractor:
         
         # Show/hide scrollbars based on image size vs canvas size
         self.update_scrollbars(new_width, new_height)
+        
+        # Force canvas update
+        self.canvas.update_idletasks()
+        self.root.update_idletasks()
     
     def update_scrollbars(self, image_width, image_height):
         """Show or hide scrollbars based on whether image is larger than canvas"""
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
         
-        # Debug output
-        print(f"Canvas size: {canvas_width}x{canvas_height}, Image size: {image_width}x{image_height}")
         
         # Only show scrollbars if we have valid canvas dimensions
         if canvas_width > 1 and canvas_height > 1:
@@ -1805,10 +1701,7 @@ class SurvivalCurveExtractor:
         self.groups_scrollable_frame.update_idletasks()
         self.groups_canvas.configure(scrollregion=self.groups_canvas.bbox("all"))
         
-        # Set default names for first few groups
-        defaults = ['WT', 'KO', 'HT', 'Control', 'Treatment']
-        if group_num <= len(defaults):
-            entry.insert(0, defaults[group_num - 1])
+        # Don't set any default values - leave empty for user to fill
             
         # Auto-update groups
         self.update_groups()
@@ -2116,6 +2009,8 @@ class SurvivalCurveExtractor:
         
         # Reset groups (will be restored from metadata or saved data)
         self.groups.clear()
+        # Clear the UI display of groups
+        self.refresh_groups_ui()
         
         # Update UI
         self.calibration_status.config(text="Click on X-axis minimum point")
@@ -2134,19 +2029,18 @@ class SurvivalCurveExtractor:
                 # Cache metadata
                 self.metadata_cache[base_name] = metadata
                 
-                # Store metadata groups for potential use
-                if 'groups_survival_experiment' in metadata:
-                    self.metadata_groups = metadata['groups_survival_experiment']
-                    
-                    # Only populate groups from metadata if no groups are already loaded (from saved results)
-                    if not self.groups:
-                        print(f"Loading groups from metadata for {base_name}: {self.metadata_groups}")
-                        self.auto_populate_groups(self.metadata_groups)
-                else:
-                    self.metadata_groups = []
-                
                 # Update image description
                 self.update_image_description(metadata.get('image_description', ''))
+                
+                # Only populate groups from metadata if no groups are already loaded from results
+                # This respects the priority: saved results > metadata
+                if 'groups_survival_experiment' in metadata and not self.groups:
+                    metadata_groups = metadata['groups_survival_experiment']
+                    if metadata_groups:  # Only populate if groups exist
+                        print(f"Auto-populating groups from metadata for {base_name}: {metadata_groups}")
+                        self.auto_populate_groups(metadata_groups)
+                    else:
+                        print(f"Empty groups in metadata for {base_name}")
                 
             except Exception as e:
                 print(f"Error loading metadata for {base_name}: {e}")
@@ -2155,6 +2049,11 @@ class SurvivalCurveExtractor:
         else:
             # No metadata file found
             self.update_image_description("No metadata file found for this image.")
+            
+        # If still no groups after checking metadata, ensure UI is clear
+        if not self.groups:
+            print(f"No groups loaded for {base_name} - ensuring groups UI is cleared")
+            self.refresh_groups_ui()
     
     def auto_populate_groups(self, groups):
         """Auto-populate group entries from metadata"""
@@ -2590,63 +2489,54 @@ class SurvivalCurveExtractor:
         
         return real_x
     
-    def toggle_zoom_panel(self):
-        """Toggle zoom panel visibility"""
-        if self.zoom_panel_visible.get():
-            # Store current position before hiding
-            self.zoom_panel_last_x = self.zoom_panel.winfo_x()
-            self.zoom_panel_last_y = self.zoom_panel.winfo_y()
-            self.zoom_panel.place_forget()
-            self.zoom_panel_visible.set(False)
-        else:
-            # Restore to last position, or default if first time
-            x = getattr(self, 'zoom_panel_last_x', 10)
-            y = getattr(self, 'zoom_panel_last_y', 10)
-            self.zoom_panel.place(x=x, y=y)
-            self.zoom_panel_visible.set(True)
     
     def zoom_in(self):
         """Zoom in on the image"""
-        self.zoom_level = min(self.zoom_level * 1.25, 5.0)  # Max 5x zoom
-        self.update_zoom()
+        try:
+            if not hasattr(self, 'zoom_level'):
+                self.zoom_level = 1.0
+            self.zoom_level = min(self.zoom_level * 1.25, 5.0)  # Max 5x zoom
+            self.update_zoom()
+        except Exception as e:
+            print(f"Error in zoom_in: {e}")
     
     def zoom_out(self):
         """Zoom out on the image"""
-        self.zoom_level = max(self.zoom_level * 0.8, 0.1)  # Min 0.1x zoom
-        self.update_zoom()
+        try:
+            if not hasattr(self, 'zoom_level'):
+                self.zoom_level = 1.0
+            self.zoom_level = max(self.zoom_level * 0.8, 0.1)  # Min 0.1x zoom
+            self.update_zoom()
+        except Exception as e:
+            print(f"Error in zoom_out: {e}")
     
     def reset_zoom(self):
         """Reset zoom to fit image"""
-        self.zoom_level = 1.0
-        self.update_zoom()
+        try:
+            self.zoom_level = 1.0
+            self.update_zoom()
+        except Exception as e:
+            print(f"Error in reset_zoom: {e}")
     
     def update_zoom(self):
         """Update the image display with current zoom level"""
-        self.zoom_label.config(text=f"{int(self.zoom_level * 100)}%")
-        if self.original_image:
-            # Store current scroll position to maintain view
-            x_view = self.canvas.canvasx(self.canvas.winfo_width() / 2)
-            y_view = self.canvas.canvasy(self.canvas.winfo_height() / 2)
+        # Prevent recursive updates
+        if getattr(self, '_updating_zoom', False):
+            return
+        
+        self._updating_zoom = True
+        try:
+            # Update zoom label
+            if hasattr(self, 'zoom_label'):
+                self.zoom_label.config(text=f"{int(self.zoom_level * 100)}%")
             
-            self.display_image_on_canvas()
-            
-            # If zoomed, try to keep the same region in view
-            if self.zoom_level > 1.0:
-                # Center the view on the previously centered area
-                canvas_width = self.canvas.winfo_width()
-                canvas_height = self.canvas.winfo_height()
-                scroll_region = self.canvas.cget('scrollregion').split()
-                if len(scroll_region) == 4:
-                    total_width = float(scroll_region[2])
-                    total_height = float(scroll_region[3])
-                    
-                    # Calculate fraction positions to maintain view
-                    x_fraction = x_view / total_width if total_width > 0 else 0.5
-                    y_fraction = y_view / total_height if total_height > 0 else 0.5
-                    
-                    # Apply the scroll position
-                    self.canvas.xview_moveto(max(0, x_fraction - 0.5))
-                    self.canvas.yview_moveto(max(0, y_fraction - 0.5))
+            # Redisplay image if it exists
+            if hasattr(self, 'original_image') and self.original_image:
+                self.display_image_on_canvas()
+        except Exception as e:
+            print(f"Error updating zoom: {e}")
+        finally:
+            self._updating_zoom = False
     
     def on_canvas_release(self, event):
         """Handle mouse button release"""
