@@ -76,14 +76,71 @@ class SurvivalCurveExtractor:
         self.auto_save_enabled = True
         self.ui_refreshing = False  # Flag to prevent auto-population during UI refresh
         
+        # Configure UI theme and colors
+        self.configure_theme()
+        
         # UI setup
         self.setup_ui()
         
         # Initialize description
         self.update_image_description("Select a dataset to begin image annotation.")
         
-        # Initially hide scrollbars
-        self.root.after(100, self.hide_initial_scrollbars)
+        # Initially hide scrollbars and set sash position
+        self.root.after(100, self.initial_layout_adjustments)
+    
+    def configure_theme(self):
+        """Configure consistent theme and colors across platforms"""
+        import platform
+        
+        # Define color scheme
+        self.colors = {
+            'bg': '#2b2b2b',           # Dark gray background
+            'bg_dark': '#1e1e1e',      # Darker gray
+            'canvas_bg': 'white',      # Canvas background (keep white for image)
+            'text': '#ffffff',         # White text color
+            'select_bg': '#0078d4',    # Selection background
+            'select_fg': 'white',      # Selection text
+            'button_bg': '#3c3c3c',    # Button background
+            'entry_bg': '#3c3c3c',     # Entry background (dark for theme consistency)
+            'frame_bg': '#2b2b2b'      # Frame background
+        }
+        
+        # Configure root window
+        self.root.configure(bg=self.colors['bg'])
+        
+        # Configure ttk style for consistent appearance
+        style = ttk.Style()
+        
+        # Set theme based on platform
+        if platform.system() == 'Windows':
+            try:
+                style.theme_use('winnative')
+            except:
+                style.theme_use('default')
+        elif platform.system() == 'Darwin':
+            try:
+                style.theme_use('aqua')
+            except:
+                style.theme_use('default')
+        else:
+            style.theme_use('default')
+        
+        # Configure specific widget styles
+        style.configure('TFrame', background=self.colors['bg'])
+        style.configure('TLabelFrame', background=self.colors['bg'], foreground=self.colors['text'])
+        style.configure('TLabelFrame.Label', background=self.colors['bg'], foreground=self.colors['text'])
+        style.configure('TLabel', background=self.colors['bg'], foreground=self.colors['text'])
+        style.configure('TButton', background=self.colors['button_bg'], foreground=self.colors['text'])
+        style.configure('TEntry', fieldbackground='#3c3c3c', foreground='white')
+        style.configure('TText', fieldbackground='#3c3c3c', foreground='white')
+        
+        # Configure Treeview
+        style.configure('Treeview', background='#3c3c3c', 
+                       foreground='white',
+                       fieldbackground='#3c3c3c')
+        style.configure('Treeview.Heading', background=self.colors['bg_dark'], foreground=self.colors['text'])
+        style.map('Treeview', background=[('selected', self.colors['select_bg'])],
+                  foreground=[('selected', self.colors['select_fg'])])
         
     def setup_ui(self):
         """Setup the user interface"""
@@ -106,7 +163,7 @@ class SurvivalCurveExtractor:
         control_container = ttk.Frame(paned_window)
         
         # Create scrollable canvas for controls
-        control_canvas = tk.Canvas(control_container, width=140, highlightthickness=0)
+        control_canvas = tk.Canvas(control_container, highlightthickness=0, bg=self.colors['bg'])
         scrollbar = ttk.Scrollbar(control_container, orient="vertical", command=control_canvas.yview)
         self.scrollable_frame = ttk.Frame(control_canvas)
         
@@ -134,8 +191,11 @@ class SurvivalCurveExtractor:
         self.image_frame = ttk.Frame(paned_window)
         
         # Add both panels to the paned window
-        paned_window.add(control_container, minsize=130, width=160)
+        paned_window.add(control_container, minsize=250, width=320)
         paned_window.add(self.image_frame, minsize=400)
+        
+        # Store reference to paned window for later adjustment
+        self.paned_window = paned_window
         
         # Setup control sections
         self.setup_calibration_controls(control_panel)
@@ -156,7 +216,7 @@ class SurvivalCurveExtractor:
         canvas_area.grid_columnconfigure(0, weight=1)
         
         # Setup image canvas in grid position (0,0)
-        self.canvas = tk.Canvas(canvas_area, bg='white')
+        self.canvas = tk.Canvas(canvas_area, bg=self.colors['canvas_bg'])
         self.canvas.grid(row=0, column=0, sticky="nsew")
         
         # Create scrollbars in grid positions
@@ -198,7 +258,7 @@ class SurvivalCurveExtractor:
         
         ttk.Button(dataset_frame, text="Select Dataset Folder", command=self.select_dataset).pack(side=tk.LEFT, padx=(0, 10))
         
-        self.dataset_label = ttk.Label(dataset_frame, text="No dataset selected", foreground="gray")
+        self.dataset_label = ttk.Label(dataset_frame, text="No dataset selected", foreground="#999999")
         self.dataset_label.pack(side=tk.LEFT, padx=(0, 20))
         
         # Navigation controls
@@ -235,7 +295,7 @@ class SurvivalCurveExtractor:
         self.next_btn.pack(side=tk.LEFT)
         
         # Current file display
-        self.current_file_label = ttk.Label(nav_frame, text="", foreground="gold")
+        self.current_file_label = ttk.Label(nav_frame, text="", foreground="#ffd700")
         self.current_file_label.pack(side=tk.LEFT, padx=(20, 0))
         
     def setup_description_panel(self, parent):
@@ -249,7 +309,7 @@ class SurvivalCurveExtractor:
         
         # Text widget with scrollbar
         self.description_text = tk.Text(desc_container, height=5, wrap=tk.WORD, 
-                                       bg='#f8f8f8', fg='#333333', font=('Arial', 11),
+                                       bg='#3c3c3c', fg='#ffffff', font=('Arial', 11),
                                        state=tk.DISABLED)
         self.description_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
@@ -491,7 +551,7 @@ class SurvivalCurveExtractor:
         self.groups_parent = frame.master
         
         # Scrollable frame for group entries
-        self.groups_canvas = tk.Canvas(frame, height=120, bg='white')
+        self.groups_canvas = tk.Canvas(frame, height=120, bg=self.colors['bg'])
         self.groups_scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.groups_canvas.yview)
         self.groups_scrollable_frame = ttk.Frame(self.groups_canvas)
         
@@ -566,7 +626,7 @@ class SurvivalCurveExtractor:
         ttk.Button(frame, text="Report Error", command=self.report_error).pack(fill=tk.X, pady=2)
         ttk.Button(frame, text="View Data", command=self.view_data).pack(fill=tk.X, pady=2)
         
-        self.export_status = ttk.Label(frame, text="Ready to mark image as complete", foreground="gold")
+        self.export_status = ttk.Label(frame, text="Ready to mark image as complete", foreground="#ffd700")
         self.export_status.pack(fill=tk.X, pady=5)
         
     def load_image(self):
@@ -1356,7 +1416,7 @@ class SurvivalCurveExtractor:
             main_width = self.root.winfo_width()
             self.zoom_window.geometry(f"+{main_x + main_width - 250}+{main_y + 50}")
             
-            self.zoom_canvas = tk.Canvas(self.zoom_window, width=self.zoom_size*2, height=self.zoom_size*2, bg='white')
+            self.zoom_canvas = tk.Canvas(self.zoom_window, width=self.zoom_size*2, height=self.zoom_size*2, bg=self.colors['bg'])
             self.zoom_canvas.pack()
             
         # Create zoomed image
@@ -2499,11 +2559,29 @@ class SurvivalCurveExtractor:
             # Update scrollbars based on new canvas size
             self.update_scrollbars(new_width, new_height)
     
-    def hide_initial_scrollbars(self):
-        """Hide scrollbars initially when no image is loaded"""
+    def initial_layout_adjustments(self):
+        """Make initial layout adjustments after window is displayed"""
+        # Hide scrollbars initially when no image is loaded
         if hasattr(self, 'v_scrollbar') and hasattr(self, 'h_scrollbar'):
             self.v_scrollbar.grid_remove()
             self.h_scrollbar.grid_remove()
+        
+        # Set the sash position to show control panel fully
+        if hasattr(self, 'paned_window') and hasattr(self, 'scrollable_frame'):
+            # Update to ensure all widgets are laid out
+            self.root.update_idletasks()
+            
+            # Get the actual required width of the control panel content
+            self.scrollable_frame.update_idletasks()
+            required_width = self.scrollable_frame.winfo_reqwidth()
+            
+            # Add some padding for scrollbar and margins
+            total_width = required_width + 40
+            
+            # Set sash position based on actual content width
+            self.paned_window.sash_place(0, total_width, 0)
+            
+            print(f"Control panel width set to {total_width}px (content: {required_width}px)")
 
     def on_closing(self):
         """Handle application closing"""
