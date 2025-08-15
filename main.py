@@ -75,6 +75,8 @@ class SurvivalCurveExtractor:
         # Removed metadata_groups fallback - now only use current image's data
         self.auto_save_enabled = True
         self.ui_refreshing = False  # Flag to prevent auto-population during UI refresh
+        self.loading_in_progress = False  # Flag to prevent auto-save during data loading
+        self.user_modified_data = False  # Flag to track if user made changes since last load
         
         # Configure UI theme and colors
         self.configure_theme()
@@ -702,21 +704,27 @@ class SurvivalCurveExtractor:
                 
         self.create_button(dialog, text="Load Selected", command=on_select).pack(pady=10)
         
-    def load_image_file(self, file_path):
+    def load_image_file(self, file_path, preserve_state=False):
         """Load and display image file"""
         try:
             self.current_image_path = file_path
             self.original_image = Image.open(file_path)
             
-            # Reset calibration and data
-            self.reset_calibration()
-            self.selected_points.clear()
+            # Only reset calibration and data if not preserving state
+            if not preserve_state:
+                print(f"LOAD_IMAGE: Resetting calibration for {file_path}")
+                self.reset_calibration()
+                self.selected_points.clear()
+            else:
+                print(f"LOAD_IMAGE: Preserving calibration and points for {file_path}")
+                print(f"LOAD_IMAGE: Current calibration: {self.axis_calibration}")
             
             # Display image
             self.display_image_on_canvas()
             
             # Update UI
-            self.calibration_btn.config(state=tk.NORMAL)
+            if hasattr(self, 'calibration_btn'):
+                self.calibration_btn.config(state=tk.NORMAL)
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load image: {str(e)}")
@@ -944,7 +952,12 @@ class SurvivalCurveExtractor:
             self.axis_calibration['y_max_coord'] = (x, y)
             self.calibration_step = 4
             next_instruction = "Calibration complete! Set groups to start extracting data."
-            # Auto-populate points with survival axis coordinates after calibration
+        
+        # Mark that user has modified data
+        self.user_modified_data = True
+        
+        # Auto-populate points with survival axis coordinates after calibration
+        if self.calibration_step == 4:
             self.auto_populate_survival_coordinates()
             
         # Clear input and update UI
@@ -1005,6 +1018,9 @@ class SurvivalCurveExtractor:
             'x': x,  # User-clicked time position
             'y': existing_point['y']  # Pre-calculated survival position
         }
+        
+        # Mark that user has modified data
+        self.user_modified_data = True
         
         # Calculate real coordinates
         real_x, real_y = self.get_real_coordinates(x, y)
@@ -1649,6 +1665,9 @@ class SurvivalCurveExtractor:
                 # Reset to placeholder instead of deleting
                 self.selected_points[key] = {'x': None, 'y': None}
         
+        # Mark that user has modified data
+        self.user_modified_data = True
+        
         # Update display
         self.update_points_tree()
         self.display_image_on_canvas()
@@ -1762,6 +1781,8 @@ class SurvivalCurveExtractor:
         
         # If groups have changed, handle renames first, then clean up removed groups
         if previous_groups != self.groups:
+            # Mark that user has modified data
+            self.user_modified_data = True
             # Handle potential group renames before cleanup
             if len(previous_groups) == len(self.groups) and previous_groups and self.groups:
                 self.handle_group_rename(previous_groups, self.groups)
@@ -1963,36 +1984,57 @@ class SurvivalCurveExtractor:
         if self.image_files:
             self.load_image_by_index(0)
     
-    def load_image_by_index(self, index, use_filtered=None):
+    def load_image_by_index(self, index, use_filtered=None, preserve_calibration=False):
         """Load image and metadata by index"""
-        # Determine which image list to use
-        if use_filtered is None:
-            use_filtered = self.only_incomplete_var.get() if hasattr(self, 'only_incomplete_var') else False
+        # Set loading flag to prevent auto-save during data loading
+        self.loading_in_progress = True
         
-        current_list = self.filtered_image_files if (use_filtered and self.filtered_image_files) else self.image_files
-        
-        if 0 <= index < len(current_list):
-            self.current_index = index
-            base_name = current_list[index]
+        try:
+            # Determine which image list to use
+            if use_filtered is None:
+                use_filtered = self.only_incomplete_var.get() if hasattr(self, 'only_incomplete_var') else False
             
-            # Reset calibration and points for new image (will be overridden if saved data exists)
-            self.reset_for_new_image()
+            current_list = self.filtered_image_files if (use_filtered and self.filtered_image_files) else self.image_files
             
-            # Load PNG image
-            png_path = self.dataset_path / "png" / f"{base_name}.png"
-            self.load_image_file(str(png_path))
-            
-            # Load previous extraction data FIRST (prioritize saved results)
-            self.load_extraction_data(base_name)
-            
-            # Load metadata only as fallback if no saved data exists
-            self.load_metadata(base_name)
-            
-            # Update navigation UI
-            self.update_navigation_state()
-            
-            # Update the done/undone button based on loaded image status
-            self.update_done_undone_button()
+            if 0 <= index < len(current_list):
+                self.current_index = index
+                base_name = current_list[index]
+                
+                # Check if results file exists before resetting
+                results_path = self.dataset_path / "results" / f"{base_name}.json"
+                
+                if not results_path.exists():
+                    # Only reset if no saved data exists
+                    print(f"No saved data for {base_name} - resetting state")
+                    self.reset_for_new_image()
+                else:
+                    # Clear only the UI groups, don't reset calibration/points that might be reloaded
+                    print(f"Saved data exists for {base_name} - preserving state")
+                    self.groups.clear()
+                    self.refresh_groups_ui()
+                
+                # Load PNG image
+                png_path = self.dataset_path / "png" / f"{base_name}.png"
+                # Preserve state if we're navigating and want to keep calibration
+                self.load_image_file(str(png_path), preserve_state=preserve_calibration)
+                
+                # Load previous extraction data FIRST (prioritize saved results)
+                # Skip calibration loading if we're preserving current calibration
+                self.load_extraction_data(base_name, preserve_calibration=preserve_calibration)
+                
+                # Load metadata only as fallback if no saved data exists
+                self.load_metadata(base_name)
+                
+                # Update navigation UI
+                self.update_navigation_state()
+                
+                # Update the done/undone button based on loaded image status
+                self.update_done_undone_button()
+        finally:
+            # Always clear loading flag when done
+            self.loading_in_progress = False
+            # Reset user modification flag after loading
+            self.user_modified_data = False
     
     def reset_for_new_image(self):
         """Reset state when loading a new image"""
@@ -2021,6 +2063,18 @@ class SurvivalCurveExtractor:
         """Load metadata for the current image and auto-populate groups"""
         metadata_path = self.dataset_path / "metadata" / f"{base_name}.json"
         
+        # SIMPLE RULE: Check if results file exists - if yes, check each field before populating
+        results_path = self.dataset_path / "results" / f"{base_name}.json"
+        results_data = {}
+        
+        if results_path.exists():
+            try:
+                with open(results_path, 'r') as f:
+                    results_data = json.load(f)
+                print(f"Results file exists for {base_name} - checking fields before metadata population")
+            except Exception as e:
+                print(f"Error reading results file for {base_name}: {e}")
+        
         if metadata_path.exists():
             try:
                 with open(metadata_path, 'r') as f:
@@ -2029,18 +2083,22 @@ class SurvivalCurveExtractor:
                 # Cache metadata
                 self.metadata_cache[base_name] = metadata
                 
-                # Update image description
+                # Always update image description (doesn't interfere with user data)
                 self.update_image_description(metadata.get('image_description', ''))
                 
-                # Only populate groups from metadata if no groups are already loaded from results
-                # This respects the priority: saved results > metadata
-                if 'groups_survival_experiment' in metadata and not self.groups:
-                    metadata_groups = metadata['groups_survival_experiment']
-                    if metadata_groups:  # Only populate if groups exist
-                        print(f"Auto-populating groups from metadata for {base_name}: {metadata_groups}")
-                        self.auto_populate_groups(metadata_groups)
+                # Check groups: only populate if groups field doesn't exist in results
+                if 'groups_survival_experiment' in metadata:
+                    groups_in_results = ("metadata" in results_data and "groups" in results_data["metadata"])
+                    
+                    if not groups_in_results and not self.groups:
+                        metadata_groups = metadata['groups_survival_experiment']
+                        if metadata_groups:
+                            print(f"Auto-populating groups from metadata for {base_name}: {metadata_groups}")
+                            self.auto_populate_groups(metadata_groups)
+                        else:
+                            print(f"Empty groups in metadata for {base_name}")
                     else:
-                        print(f"Empty groups in metadata for {base_name}")
+                        print(f"Groups field exists in results for {base_name} - skipping metadata groups")
                 
             except Exception as e:
                 print(f"Error loading metadata for {base_name}: {e}")
@@ -2050,9 +2108,10 @@ class SurvivalCurveExtractor:
             # No metadata file found
             self.update_image_description("No metadata file found for this image.")
             
-        # If still no groups after checking metadata, ensure UI is clear
-        if not self.groups:
-            print(f"No groups loaded for {base_name} - ensuring groups UI is cleared")
+        # Clear groups UI only if no groups exist and no groups in results
+        groups_in_results = ("metadata" in results_data and "groups" in results_data["metadata"])
+        if not self.groups and not groups_in_results:
+            print(f"No groups found for {base_name} - ensuring groups UI is cleared")
             self.refresh_groups_ui()
     
     def auto_populate_groups(self, groups):
@@ -2063,33 +2122,55 @@ class SurvivalCurveExtractor:
             group_entry['frame'].destroy()
         self.group_entries = []
         
-        # Add groups from metadata
+        # Add groups from metadata using silent method to avoid triggering auto-save
         for group_name in groups:
-            self.add_group_field()
+            self.add_group_field_silent()
             # Set the name in the last added entry
             if self.group_entries:
                 last_entry = self.group_entries[-1]['entry']
                 last_entry.delete(0, tk.END)
                 last_entry.insert(0, group_name)
         
-        # Update the points table and groups
-        self.update_groups()
+        # Update the groups list without triggering auto-save during metadata population
+        self.groups = []
+        for group_data in self.group_entries:
+            group_name = group_data['entry'].get().strip()
+            if group_name:
+                self.groups.append(group_name)
+        
+        # Update UI without auto-save
+        self.refresh_groups_ui()
+        self.populate_missing_points()
     
     def prev_image(self):
         """Navigate to previous image"""
         current_list = self.get_current_image_list()
         if self.current_index > 0:
             # Auto-save current state before navigating
+            current_cal_state = self.is_calibrated()
+            print(f"NAVIGATION: Current calibration state before prev_image: {current_cal_state}")
+            if current_cal_state:
+                print(f"NAVIGATION: Current calibration: {self.axis_calibration}")
             self.auto_save_current_state()
-            self.load_image_by_index(self.current_index - 1)
+            # Preserve calibration if currently calibrated
+            preserve_cal = self.is_calibrated()
+            print(f"NAVIGATION: Will preserve calibration: {preserve_cal}")
+            self.load_image_by_index(self.current_index - 1, preserve_calibration=preserve_cal)
     
     def next_image(self):
         """Navigate to next image"""
         current_list = self.get_current_image_list()
         if self.current_index < len(current_list) - 1:
             # Auto-save current state before navigating
+            current_cal_state = self.is_calibrated()
+            print(f"NAVIGATION: Current calibration state before next_image: {current_cal_state}")
+            if current_cal_state:
+                print(f"NAVIGATION: Current calibration: {self.axis_calibration}")
             self.auto_save_current_state()
-            self.load_image_by_index(self.current_index + 1)
+            # Preserve calibration if currently calibrated
+            preserve_cal = self.is_calibrated()
+            print(f"NAVIGATION: Will preserve calibration: {preserve_cal}")
+            self.load_image_by_index(self.current_index + 1, preserve_calibration=preserve_cal)
     
     def get_current_image_list(self):
         """Get the current image list (filtered or full)"""
@@ -2128,21 +2209,15 @@ class SurvivalCurveExtractor:
         """Update navigation controls after filtering changes"""
         self.update_navigation_state()
     
-    def load_image_file(self, file_path):
-        """Load an image file (used by navigation system)"""
-        try:
-            self.current_image_path = file_path
-            self.original_image = Image.open(file_path)
-            
-            self.display_image_on_canvas()
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load image: {str(e)}")
 
     def auto_save_current_state(self, status=None, error=None):
         """Automatically save the current extraction state"""
         if not self.auto_save_enabled or not self.dataset_path or not self.image_files:
             print("Auto-save skipped: not enabled or missing dataset/images")
+            return
+            
+        if self.loading_in_progress:
+            print("Auto-save skipped: loading in progress")
             return
             
         if self.current_index >= len(self.image_files):
@@ -2157,6 +2232,10 @@ class SurvivalCurveExtractor:
         """Save current state and clear status/error"""
         if not self.auto_save_enabled or not self.dataset_path or not self.image_files:
             print("Auto-save skipped: not enabled or missing dataset/images")
+            return
+            
+        if self.loading_in_progress:
+            print("Auto-save skipped: loading in progress")
             return
             
         if self.current_index >= len(self.image_files):
@@ -2174,50 +2253,65 @@ class SurvivalCurveExtractor:
             results_path = self.dataset_path / "results"
             results_path.mkdir(exist_ok=True)
             
-            # Load existing data to preserve status and error information
+            # Load existing data to preserve ALL existing information (NEVER overwrite with metadata)
             result_file = results_path / f"{base_name}.json"
-            existing_status = None
-            existing_error = None
+            existing_data = {}
             
             if result_file.exists():
                 try:
                     with open(result_file, 'r') as f:
                         existing_data = json.load(f)
-                    existing_status = existing_data.get("status")
-                    existing_error = existing_data.get("error")
-                    print(f"Preserving existing status: {existing_status}, error: {existing_error}")
+                    print(f"SAVE: Found existing results file for {base_name} - preserving existing data")
                 except Exception as e:
-                    print(f"Could not load existing status/error: {e}")
+                    print(f"Could not load existing data: {e}")
+                    existing_data = {}
             
             # Note: We preserve all user-created points, even if groups change
             
-            # Prepare data to save
-            save_data = {
-                "metadata": {
-                    "image_file": f"{base_name}.png",
-                    "extraction_date": self.get_current_timestamp(),
-                    "x_axis_type": self.x_axis_type,
-                    "y_axis_type": self.y_axis_type,
-                    "x_axis_units": self.x_axis_units,
-                    "y_axis_units": self.y_axis_units,
-                    "calibration": self.axis_calibration.copy(),
-                    "groups": self.groups.copy()
-                },
-                "extracted_points": {},
-                "raw_coordinates": {}
-            }
+            # Prepare data to save 
+            # RULE: Only preserve existing metadata if user hasn't made changes (prevents metadata overwrite)
+            # If user made changes, always save current state
+            if existing_data and not self.user_modified_data:
+                print(f"SAVE: No user changes detected - preserving existing metadata for {base_name}")
+                save_data = existing_data.copy()  # Start with existing data
+                # Only update extraction_date and timestamp
+                if "metadata" not in save_data:
+                    save_data["metadata"] = {}
+                save_data["metadata"]["extraction_date"] = self.get_current_timestamp()
+                save_data["metadata"]["image_file"] = f"{base_name}.png"
+            else:
+                if existing_data and self.user_modified_data:
+                    print(f"SAVE: User made changes - updating all data for {base_name}")
+                else:
+                    print(f"SAVE: Creating new metadata structure for {base_name}")
+                save_data = {
+                    "metadata": {
+                        "image_file": f"{base_name}.png",
+                        "extraction_date": self.get_current_timestamp(),
+                        "x_axis_type": self.x_axis_type,
+                        "y_axis_type": self.y_axis_type,
+                        "x_axis_units": self.x_axis_units,
+                        "y_axis_units": self.y_axis_units,
+                        "calibration": self.axis_calibration.copy(),
+                        "groups": self.groups.copy()
+                    },
+                    "extracted_points": {},
+                    "raw_coordinates": {}
+                }
+                # Preserve status and error from existing data if available
+                if existing_data:
+                    if "status" in existing_data:
+                        save_data["status"] = existing_data["status"]
+                    if "error" in existing_data:
+                        save_data["error"] = existing_data["error"]
             
-            # Handle status: use provided status, or preserve existing status
-            final_status = status if status is not None else existing_status
-            if final_status:
-                save_data["status"] = final_status
-                print(f"Saving status: {final_status}")
-            
-            # Handle error: use provided error, or preserve existing error
-            final_error = error if error is not None else existing_error
-            if final_error:
-                save_data["error"] = final_error
-                print(f"Saving error: {final_error}")
+            # Handle status and error if provided (these override any existing values)
+            if status is not None:
+                save_data["status"] = status
+                print(f"Saving status: {status}")
+            if error is not None:
+                save_data["error"] = error
+                print(f"Saving error: {error}")
             
             # Process extracted points - include ALL points (populated and set)
             for key, coord in self.selected_points.items():
@@ -2265,21 +2359,52 @@ class SurvivalCurveExtractor:
             results_path = self.dataset_path / "results"
             results_path.mkdir(exist_ok=True)
             
-            # Prepare data to save (without status and error fields)
-            save_data = {
-                "metadata": {
-                    "image_file": f"{base_name}.png",
-                    "extraction_date": self.get_current_timestamp(),
-                    "x_axis_type": self.x_axis_type,
-                    "y_axis_type": self.y_axis_type,
-                    "x_axis_units": self.x_axis_units,
-                    "y_axis_units": self.y_axis_units,
-                    "calibration": self.axis_calibration.copy(),
-                    "groups": self.groups.copy()
-                },
-                "extracted_points": {},
-                "raw_coordinates": {}
-            }
+            # Load existing data to preserve ALL existing information (NEVER overwrite with metadata)
+            result_file = results_path / f"{base_name}.json"
+            existing_data = {}
+            
+            if result_file.exists():
+                try:
+                    with open(result_file, 'r') as f:
+                        existing_data = json.load(f)
+                    print(f"SAVE_CLEAR: Found existing results file for {base_name} - preserving existing data")
+                except Exception as e:
+                    print(f"Could not load existing data: {e}")
+                    existing_data = {}
+            
+            # Prepare data to save 
+            # RULE: Only preserve existing metadata if user hasn't made changes (prevents metadata overwrite)
+            # If user made changes, always save current state
+            if existing_data and not self.user_modified_data:
+                print(f"SAVE_CLEAR: No user changes detected - preserving existing metadata for {base_name}")
+                save_data = existing_data.copy()  # Start with existing data
+                # Only update extraction_date and remove status/error
+                if "metadata" not in save_data:
+                    save_data["metadata"] = {}
+                save_data["metadata"]["extraction_date"] = self.get_current_timestamp()
+                save_data["metadata"]["image_file"] = f"{base_name}.png"
+                # Remove status and error fields as intended
+                save_data.pop("status", None)
+                save_data.pop("error", None)
+            else:
+                if existing_data and self.user_modified_data:
+                    print(f"SAVE_CLEAR: User made changes - updating all data for {base_name}")
+                else:
+                    print(f"SAVE_CLEAR: Creating new metadata structure for {base_name}")
+                save_data = {
+                    "metadata": {
+                        "image_file": f"{base_name}.png",
+                        "extraction_date": self.get_current_timestamp(),
+                        "x_axis_type": self.x_axis_type,
+                        "y_axis_type": self.y_axis_type,
+                        "x_axis_units": self.x_axis_units,
+                        "y_axis_units": self.y_axis_units,
+                        "calibration": self.axis_calibration.copy(),
+                        "groups": self.groups.copy()
+                    },
+                    "extracted_points": {},
+                    "raw_coordinates": {}
+                }
             
             # Process extracted points - same as regular save
             for key, coord in self.selected_points.items():
@@ -2373,11 +2498,19 @@ class SurvivalCurveExtractor:
         # Add the updated points
         self.selected_points.update(points_to_update)
     
-    def load_extraction_data(self, base_name):
+    def load_extraction_data(self, base_name, preserve_calibration=False):
         """Load previously saved extraction data"""
+        # Track what was loaded from results to prevent metadata override
+        loaded_data = {
+            'calibration': False,
+            'groups': False, 
+            'points': False,
+            'status': False,
+            'axis_config': False
+        }
+        
         try:
             results_path = self.dataset_path / "results" / f"{base_name}.json"
-            groups_loaded = False
             
             if results_path.exists():
                 with open(results_path, 'r') as f:
@@ -2390,11 +2523,18 @@ class SurvivalCurveExtractor:
                         print(f"Using saved groups for {base_name}: {saved_groups}")
                         self.groups = saved_groups.copy()  # Direct assignment without auto-population
                         self.refresh_groups_ui()  # Update UI only
-                        groups_loaded = True
+                        loaded_data['groups'] = True
+                    else:
+                        # Even empty groups in results should prevent metadata loading
+                        print(f"Empty groups found in results for {base_name} - preventing metadata override")
+                        loaded_data['groups'] = True
                 
                 # Restore axis types and units if saved (priority over defaults)
                 if "metadata" in data:
                     metadata = data["metadata"]
+                    if "x_axis_type" in metadata or "y_axis_type" in metadata or "x_axis_units" in metadata or "y_axis_units" in metadata:
+                        loaded_data['axis_config'] = True
+                        
                     if "x_axis_type" in metadata:
                         self.x_axis_type = metadata["x_axis_type"]
                         if hasattr(self, 'x_axis_var'):
@@ -2414,45 +2554,52 @@ class SurvivalCurveExtractor:
                             self.y_units_entry.delete(0, tk.END)
                             self.y_units_entry.insert(0, self.y_axis_units)
                 
-                # Restore calibration if saved
-                if "calibration" in data.get("metadata", {}):
+                # Restore calibration if saved (unless preserving current calibration)
+                if not preserve_calibration and "calibration" in data.get("metadata", {}):
                     saved_calibration = data["metadata"]["calibration"]
                     self.axis_calibration.update(saved_calibration)
+                    loaded_data['calibration'] = True
                     # Update calibration step based on how complete it is
                     if self.is_calibrated():
                         self.calibration_step = 4
                         self.calibration_status.config(text="Calibration complete! (loaded from file)")
                         if hasattr(self, 'calibration_btn'):
                             self.calibration_btn.config(state=tk.DISABLED)
+                elif preserve_calibration:
+                    print(f"LOAD_EXTRACTION: Preserving current calibration for {base_name} - not loading from saved data")
+                    print(f"LOAD_EXTRACTION: Current calibration being preserved: {self.axis_calibration}")
                 
                 # Restore selected points from raw coordinates FIRST
-                points_loaded = False
                 if "raw_coordinates" in data:
                     self.selected_points = data["raw_coordinates"]
-                    points_loaded = True
+                    loaded_data['points'] = True
                     if hasattr(self, 'points_tree'):
                         self.update_points_tree()
                     self.display_image_on_canvas()
                     print(f"Loaded {len(self.selected_points)} existing points from saved data")
                 
                 # Only auto-populate points if calibration exists AND no points were loaded
-                if self.is_calibrated() and not points_loaded:
+                if self.is_calibrated() and not loaded_data['points']:
                     print("Calibration loaded but no points exist - auto-populating survival coordinates")
                     self.auto_populate_survival_coordinates()
-                elif self.is_calibrated() and points_loaded:
+                elif self.is_calibrated() and loaded_data['points']:
                     print("Calibration and points loaded - preserving existing points, no auto-population")
                 
                 # Restore status and error information if saved
                 if "status" in data:
+                    loaded_data['status'] = True
                     print(f"Loaded status '{data['status']}' for {base_name}")
                 if "error" in data:
                     print(f"Loaded error info for {base_name}: {data['error']}")
                 
-            # Note: Metadata groups will be loaded by load_metadata() if no saved groups exist
+            # Store what was loaded for metadata method to respect
+            self._loaded_from_results = loaded_data
+            return loaded_data
                 
         except Exception as e:
             print(f"Failed to load extraction data for {base_name}: {e}")
-            # Note: Metadata groups will be loaded by load_metadata() as fallback
+            self._loaded_from_results = loaded_data
+            return loaded_data
     
     def get_current_timestamp(self):
         """Get current timestamp in ISO format"""
