@@ -87,6 +87,12 @@ class SurvivalCurveExtractor:
         
         # Initially hide scrollbars and set sash position
         self.root.after(100, self.initial_layout_adjustments)
+        
+        # Bind window focus events to maintain button styling on macOS
+        self.root.bind('<FocusIn>', lambda e: self.root.after(10, self.maintain_button_styling))
+        self.root.bind('<FocusOut>', lambda e: self.root.after(10, self.maintain_button_styling))
+        self.root.bind('<Activate>', lambda e: self.root.after(10, self.maintain_button_styling))
+        self.root.bind('<Deactivate>', lambda e: self.root.after(10, self.maintain_button_styling))
     
     def configure_theme(self):
         """Configure consistent theme and colors across platforms"""
@@ -144,15 +150,50 @@ class SurvivalCurveExtractor:
     
     def create_button(self, parent, text, command=None, width=None, state=None):
         """Create a styled button with consistent dark theme"""
+        import platform
+        
+        # Create button with explicit styling for cross-platform consistency
         btn = tk.Button(parent, text=text, command=command,
                        bg=self.colors['button_bg'], fg=self.colors['text'],
                        activebackground='#4a4a4a', activeforeground='white',
-                       relief=tk.RAISED, bd=1)
+                       relief=tk.RAISED, bd=1,
+                       highlightthickness=0,  # Remove highlight border
+                       font=('Arial', 11))    # Explicit font
+        
+        # Platform-specific adjustments
+        if platform.system() == 'Darwin':  # macOS
+            btn.config(
+                highlightbackground=self.colors['button_bg'],  # macOS specific
+                highlightcolor=self.colors['button_bg'],
+                borderwidth=1,
+                relief=tk.RAISED
+            )
+        
         if width:
             btn.config(width=width)
         if state:
             btn.config(state=state)
+            
         return btn
+    
+    def maintain_button_styling(self):
+        """Maintain button styling across all buttons"""
+        # Find all tk.Button widgets and reapply styling
+        def apply_to_buttons(widget):
+            try:
+                for child in widget.winfo_children():
+                    if isinstance(child, tk.Button):
+                        child.config(
+                            bg=self.colors['button_bg'], 
+                            fg=self.colors['text'],
+                            activebackground='#4a4a4a', 
+                            activeforeground='white',
+                            highlightbackground=self.colors['button_bg']
+                        )
+                    apply_to_buttons(child)
+            except:
+                pass
+        apply_to_buttons(self.root)
         
     def setup_ui(self):
         """Setup the user interface"""
