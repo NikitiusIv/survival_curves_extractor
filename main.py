@@ -2015,12 +2015,12 @@ class SurvivalCurveExtractor:
                 
                 # Load PNG image
                 png_path = self.dataset_path / "png" / f"{base_name}.png"
-                # Preserve state if we're navigating and want to keep calibration
-                self.load_image_file(str(png_path), preserve_state=preserve_calibration)
+                # Don't preserve state - let each image use its own calibration
+                self.load_image_file(str(png_path), preserve_state=False)
                 
                 # Load previous extraction data FIRST (prioritize saved results)
-                # Skip calibration loading if we're preserving current calibration
-                self.load_extraction_data(base_name, preserve_calibration=preserve_calibration)
+                # Always load the correct calibration for each image
+                self.load_extraction_data(base_name, preserve_calibration=False)
                 
                 # Load metadata only as fallback if no saved data exists
                 self.load_metadata(base_name)
@@ -2152,10 +2152,9 @@ class SurvivalCurveExtractor:
             if current_cal_state:
                 print(f"NAVIGATION: Current calibration: {self.axis_calibration}")
             self.auto_save_current_state()
-            # Preserve calibration if currently calibrated
-            preserve_cal = self.is_calibrated()
-            print(f"NAVIGATION: Will preserve calibration: {preserve_cal}")
-            self.load_image_by_index(self.current_index - 1, preserve_calibration=preserve_cal)
+            # Don't preserve calibration when navigating - each image should use its own calibration
+            print(f"NAVIGATION: Loading previous image with its own calibration")
+            self.load_image_by_index(self.current_index - 1, preserve_calibration=False)
     
     def next_image(self):
         """Navigate to next image"""
@@ -2167,10 +2166,9 @@ class SurvivalCurveExtractor:
             if current_cal_state:
                 print(f"NAVIGATION: Current calibration: {self.axis_calibration}")
             self.auto_save_current_state()
-            # Preserve calibration if currently calibrated
-            preserve_cal = self.is_calibrated()
-            print(f"NAVIGATION: Will preserve calibration: {preserve_cal}")
-            self.load_image_by_index(self.current_index + 1, preserve_calibration=preserve_cal)
+            # Don't preserve calibration when navigating - each image should use its own calibration
+            print(f"NAVIGATION: Loading next image with its own calibration")
+            self.load_image_by_index(self.current_index + 1, preserve_calibration=False)
     
     def get_current_image_list(self):
         """Get the current image list (filtered or full)"""
@@ -2330,10 +2328,14 @@ class SurvivalCurveExtractor:
                         
                         # Save time values for points with X coordinates set
                         if coord is not None and coord.get('x') is not None:
-                            # Convert pixel coordinates to real values if calibration exists
+                            # Convert pixel coordinates to real values using the calibration being saved
                             time_value = None
-                            if self.is_calibrated():
-                                time_value = self.pixel_to_real_x(coord['x'])
+                            saved_calibration = save_data["metadata"]["calibration"]
+                            if self.is_calibration_data_complete(saved_calibration):
+                                time_value = self.pixel_to_real_x_with_calibration(coord['x'], saved_calibration)
+                                print(f"SAVE: Using saved calibration for {base_name} - pixel {coord['x']} -> time {time_value}")
+                            else:
+                                print(f"SAVE: No valid calibration for {base_name} - saving time as None")
                             
                             save_data["extracted_points"][survival_rate][group] = time_value
                         else:
@@ -2417,8 +2419,12 @@ class SurvivalCurveExtractor:
                         
                         if coord is not None and coord.get('x') is not None:
                             time_value = None
-                            if self.is_calibrated():
-                                time_value = self.pixel_to_real_x(coord['x'])
+                            saved_calibration = save_data["metadata"]["calibration"]
+                            if self.is_calibration_data_complete(saved_calibration):
+                                time_value = self.pixel_to_real_x_with_calibration(coord['x'], saved_calibration)
+                                print(f"SAVE_CLEAR: Using saved calibration for {base_name} - pixel {coord['x']} -> time {time_value}")
+                            else:
+                                print(f"SAVE_CLEAR: No valid calibration for {base_name} - saving time as None")
                             save_data["extracted_points"][survival_rate][group] = time_value
                         else:
                             save_data["extracted_points"][survival_rate][group] = None
@@ -2613,6 +2619,40 @@ class SurvivalCurveExtractor:
             cal['x_min'], cal['x_max'], cal['y_min'], cal['y_max'],
             cal['x_min_coord'], cal['x_max_coord'], cal['y_min_coord'], cal['y_max_coord']
         ])
+    
+    def is_calibration_data_complete(self, calibration):
+        """Check if a given calibration dictionary is complete"""
+        if not calibration:
+            return False
+        return all(val is not None for val in [
+            calibration.get('x_min'), calibration.get('x_max'), 
+            calibration.get('y_min'), calibration.get('y_max'),
+            calibration.get('x_min_coord'), calibration.get('x_max_coord'), 
+            calibration.get('y_min_coord'), calibration.get('y_max_coord')
+        ])
+    
+    def pixel_to_real_x_with_calibration(self, pixel_x, calibration):
+        """Convert pixel X coordinate to real X axis value using specific calibration"""
+        if not self.is_calibration_data_complete(calibration):
+            return None
+            
+        x_min_coord = calibration['x_min_coord'][0]  # x coordinate of min point
+        x_max_coord = calibration['x_max_coord'][0]  # x coordinate of max point
+        x_min_val = calibration['x_min']
+        x_max_val = calibration['x_max']
+        
+        # Linear interpolation
+        x_range = x_max_val - x_min_val
+        pixel_x_range = x_max_coord - x_min_coord
+        
+        if pixel_x_range == 0:
+            return x_min_val
+            
+        # Calculate position as ratio and interpolate
+        ratio = (pixel_x - x_min_coord) / pixel_x_range
+        real_x = x_min_val + (ratio * x_range)
+        
+        return real_x
     
     def pixel_to_real_x(self, pixel_x):
         """Convert pixel X coordinate to real X axis value"""
