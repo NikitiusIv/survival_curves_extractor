@@ -1427,6 +1427,11 @@ class SurvivalCurveExtractor:
     
     def on_units_change(self, event=None):
         """Handle axis units change"""
+        # Don't process during loading to avoid false saves
+        if self.loading_in_progress:
+            print("UNITS_CHANGE: Skipped during loading")
+            return
+            
         # Update internal units values
         if hasattr(self, 'x_units_entry'):
             new_x_units = self.x_units_entry.get().strip()
@@ -1442,8 +1447,10 @@ class SurvivalCurveExtractor:
         self.user_modified_data = True
         print(f"UNITS_CHANGE: User modified units to x={self.x_axis_units}, y={self.y_axis_units}")
         
-        # Auto-save changes
-        self.auto_save_current_state()
+        # Force immediate save of units changes
+        if not self.loading_in_progress:
+            print("UNITS_CHANGE: Forcing immediate save")
+            self.auto_save_current_state()
         
     def show_zoom_window(self, center_x, center_y):
         """Show zoom window for precise calibration"""
@@ -2004,6 +2011,7 @@ class SurvivalCurveExtractor:
         """Load image and metadata by index"""
         # Set loading flag to prevent auto-save during data loading
         self.loading_in_progress = True
+        base_name = None  # Initialize for finally block
         
         try:
             # Determine which image list to use
@@ -2049,8 +2057,18 @@ class SurvivalCurveExtractor:
         finally:
             # Always clear loading flag when done
             self.loading_in_progress = False
-            # Reset user modification flag after loading
-            self.user_modified_data = False
+            
+            # Only reset user modification flag when actually switching images
+            # Don't reset if we're reloading the same image (user might have made changes)
+            if base_name and hasattr(self, '_last_loaded_image') and self._last_loaded_image != base_name:
+                self.user_modified_data = False
+                print(f"LOAD: Reset user_modified_data - switched from {self._last_loaded_image} to {base_name}")
+            else:
+                print(f"LOAD: Keeping user_modified_data={self.user_modified_data} - same image or first load")
+            
+            # Track last loaded image
+            if base_name:
+                self._last_loaded_image = base_name
     
     def reset_for_new_image(self):
         """Reset state when loading a new image"""
@@ -2287,6 +2305,8 @@ class SurvivalCurveExtractor:
             # If user made changes, always save current state
             if existing_data and not self.user_modified_data:
                 print(f"SAVE: No user changes detected - preserving existing metadata for {base_name}")
+                print(f"SAVE: Current units in memory: x={self.x_axis_units}, y={self.y_axis_units}")
+                print(f"SAVE: Existing units in file: x={existing_data.get('metadata', {}).get('x_axis_units')}, y={existing_data.get('metadata', {}).get('y_axis_units')}")
                 save_data = existing_data.copy()  # Start with existing data
                 # Only update extraction_date and timestamp
                 if "metadata" not in save_data:
@@ -2296,8 +2316,10 @@ class SurvivalCurveExtractor:
             else:
                 if existing_data and self.user_modified_data:
                     print(f"SAVE: User made changes - updating all data for {base_name}")
+                    print(f"SAVE: Saving current units: x={self.x_axis_units}, y={self.y_axis_units}")
                 else:
                     print(f"SAVE: Creating new metadata structure for {base_name}")
+                    print(f"SAVE: Saving current units: x={self.x_axis_units}, y={self.y_axis_units}")
                 save_data = {
                     "metadata": {
                         "image_file": f"{base_name}.png",
