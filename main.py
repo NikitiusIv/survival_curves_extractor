@@ -1171,6 +1171,10 @@ class SurvivalCurveExtractor:
             messagebox.showwarning("No Image", "Please select an image first.")
             return
             
+        # Mark that user has modified data (status change)
+        self.user_modified_data = True
+        print(f"MARK_DONE: User marked image as done")
+            
         # Auto-save current state with done status
         self.auto_save_current_state(status="done")
         self.export_status.config(text="Image marked as DONE ✓")
@@ -1218,6 +1222,10 @@ class SurvivalCurveExtractor:
         if not self.current_image_path:
             messagebox.showwarning("No Image", "Please select an image first.")
             return
+            
+        # Mark that user has modified data (status change)
+        self.user_modified_data = True
+        print(f"MARK_UNDONE: User marked image as undone")
             
         # Remove status by saving with empty status and error
         self.auto_save_current_state_clear_status()
@@ -1410,6 +1418,10 @@ class SurvivalCurveExtractor:
             self.y_axis_type = 'time'
             self.y_axis_label.config(text='time')
             
+        # Mark that user has modified data
+        self.user_modified_data = True
+        print(f"AXIS_CHANGE: User modified axis types to x={self.x_axis_type}, y={self.y_axis_type}")
+            
         # Reset calibration when axis types change
         self.reset_calibration()
     
@@ -1425,6 +1437,10 @@ class SurvivalCurveExtractor:
             new_y_units = self.y_units_entry.get().strip()
             if new_y_units:
                 self.y_axis_units = new_y_units
+        
+        # Mark that user has modified data
+        self.user_modified_data = True
+        print(f"UNITS_CHANGE: User modified units to x={self.x_axis_units}, y={self.y_axis_units}")
         
         # Auto-save changes
         self.auto_save_current_state()
