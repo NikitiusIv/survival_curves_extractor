@@ -55,6 +55,10 @@ class SurvivalCurveExtractor:
         self.x_axis_units = 'months'
         self.y_axis_units = '% cumulative survival'
         
+        # Subplot label and notes
+        self.subplot_label = ''
+        self.curator_notes = ''
+        
         # Survival rate levels and groups
         self.survival_rates = ['0%', '25%', '50%', '75%', '100%']
         self.groups = []
@@ -630,12 +634,40 @@ class SurvivalCurveExtractor:
         frame = ttk.LabelFrame(parent, text="4. Complete Image", padding=5)
         frame.pack(fill=tk.X, pady=(0, 10))
         
+        # Subplot Label section
+        subplot_frame = ttk.Frame(frame)
+        subplot_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(subplot_frame, text="Subplot Label:").pack(side=tk.LEFT, padx=(0, 5))
+        self.subplot_entry = ttk.Entry(subplot_frame, width=10)
+        self.subplot_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.subplot_entry.bind('<KeyRelease>', self.on_subplot_change)
+        self.subplot_entry.bind('<FocusOut>', self.on_subplot_change)
+        
+        # Notes section
+        notes_frame = ttk.Frame(frame)
+        notes_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(notes_frame, text="Notes:").pack(anchor=tk.W)
+        
+        # Create text widget for notes with scrollbar
+        notes_text_frame = ttk.Frame(notes_frame)
+        notes_text_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.notes_text = tk.Text(notes_text_frame, height=3, wrap=tk.WORD)
+        notes_scrollbar = ttk.Scrollbar(notes_text_frame, command=self.notes_text.yview)
+        self.notes_text.configure(yscrollcommand=notes_scrollbar.set)
+        
+        self.notes_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        notes_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind notes changes
+        self.notes_text.bind('<KeyRelease>', self.on_notes_change)
+        self.notes_text.bind('<FocusOut>', self.on_notes_change)
+        
         # Create dynamic Done/Undone button (will be updated based on status)
         self.done_undone_btn = self.create_button(frame, text="Done", command=self.toggle_done_status)
-        self.done_undone_btn.pack(fill=tk.X, pady=2)
+        self.done_undone_btn.pack(fill=tk.X, pady=(5, 2))
         
         self.create_button(frame, text="Report Error", command=self.report_error).pack(fill=tk.X, pady=2)
-        self.create_button(frame, text="View Data", command=self.view_data).pack(fill=tk.X, pady=2)
         
         self.export_status = ttk.Label(frame, text="Ready to mark image as complete", foreground="#ffd700")
         self.export_status.pack(fill=tk.X, pady=5)
@@ -1117,7 +1149,8 @@ class SurvivalCurveExtractor:
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export data: {str(e)}")
             
-    def view_data(self):
+    # Removed - replaced by subplot label and notes functionality
+    # def view_data(self):
         """View current data in a popup window"""
         if not self.selected_points:
             messagebox.showinfo("No Data", "No data points selected yet.")
@@ -1424,6 +1457,48 @@ class SurvivalCurveExtractor:
             
         # Reset calibration when axis types change
         self.reset_calibration()
+    
+    def on_subplot_change(self, event=None):
+        """Handle subplot label change"""
+        # Don't process during loading to avoid false saves
+        if self.loading_in_progress:
+            print("SUBPLOT_CHANGE: Skipped during loading")
+            return
+            
+        # Update subplot label
+        if hasattr(self, 'subplot_entry'):
+            new_subplot = self.subplot_entry.get().strip()
+            self.subplot_label = new_subplot
+            
+            # Mark that user has modified data
+            self.user_modified_data = True
+            print(f"SUBPLOT_CHANGE: User modified subplot label to '{self.subplot_label}'")
+            
+            # Force immediate save
+            if not self.loading_in_progress:
+                print("SUBPLOT_CHANGE: Forcing immediate save")
+                self.auto_save_current_state()
+                
+    def on_notes_change(self, event=None):
+        """Handle notes change"""
+        # Don't process during loading to avoid false saves
+        if self.loading_in_progress:
+            print("NOTES_CHANGE: Skipped during loading")
+            return
+            
+        # Update notes
+        if hasattr(self, 'notes_text'):
+            new_notes = self.notes_text.get('1.0', tk.END).strip()
+            self.curator_notes = new_notes
+            
+            # Mark that user has modified data
+            self.user_modified_data = True
+            print(f"NOTES_CHANGE: User modified notes (length: {len(self.curator_notes)})")
+            
+            # Force immediate save
+            if not self.loading_in_progress:
+                print("NOTES_CHANGE: Forcing immediate save")
+                self.auto_save_current_state()
     
     def on_units_change(self, event=None):
         """Handle axis units change"""
@@ -2088,6 +2163,14 @@ class SurvivalCurveExtractor:
         # Clear the UI display of groups
         self.refresh_groups_ui()
         
+        # Reset subplot label and notes
+        self.subplot_label = ''
+        self.curator_notes = ''
+        if hasattr(self, 'subplot_entry'):
+            self.subplot_entry.delete(0, tk.END)
+        if hasattr(self, 'notes_text'):
+            self.notes_text.delete('1.0', tk.END)
+        
         # Update UI
         self.calibration_status.config(text="Click on X-axis minimum point")
         if hasattr(self, 'calibration_btn'):
@@ -2348,6 +2431,14 @@ class SurvivalCurveExtractor:
             if error is not None:
                 save_data["error"] = error
                 print(f"Saving error: {error}")
+                
+            # Add subplot label and notes at root level
+            if self.subplot_label:
+                save_data["subplot_label"] = self.subplot_label
+                print(f"SAVE: Saving subplot label: '{self.subplot_label}'")
+            if self.curator_notes:
+                save_data["notes"] = self.curator_notes
+                print(f"SAVE: Saving notes (length: {len(self.curator_notes)})")
             
             # Process extracted points - include ALL points (populated and set)
             for key, coord in self.selected_points.items():
@@ -2468,6 +2559,14 @@ class SurvivalCurveExtractor:
                             save_data["extracted_points"][survival_rate][group] = None
                 except ValueError:
                     save_data["raw_coordinates"][key] = coord
+            
+            # Add subplot label and notes at root level (but not status/error)
+            if self.subplot_label:
+                save_data["subplot_label"] = self.subplot_label
+                print(f"SAVE_CLEAR: Saving subplot label: '{self.subplot_label}'")
+            if self.curator_notes:
+                save_data["notes"] = self.curator_notes
+                print(f"SAVE_CLEAR: Saving notes (length: {len(self.curator_notes)})")
             
             # Save to JSON file (deliberately not including status or error)
             result_file = results_path / f"{base_name}.json"
@@ -2635,6 +2734,21 @@ class SurvivalCurveExtractor:
                     print(f"Loaded status '{data['status']}' for {base_name}")
                 if "error" in data:
                     print(f"Loaded error info for {base_name}: {data['error']}")
+                    
+                # Restore subplot label and notes if saved
+                if "subplot_label" in data:
+                    self.subplot_label = data["subplot_label"]
+                    if hasattr(self, 'subplot_entry'):
+                        self.subplot_entry.delete(0, tk.END)
+                        self.subplot_entry.insert(0, self.subplot_label)
+                    print(f"Loaded subplot label '{self.subplot_label}' for {base_name}")
+                    
+                if "notes" in data:
+                    self.curator_notes = data["notes"]
+                    if hasattr(self, 'notes_text'):
+                        self.notes_text.delete('1.0', tk.END)
+                        self.notes_text.insert('1.0', self.curator_notes)
+                    print(f"Loaded notes for {base_name} (length: {len(self.curator_notes)})")
                 
             # Store what was loaded for metadata method to respect
             self._loaded_from_results = loaded_data
