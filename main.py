@@ -2432,13 +2432,11 @@ class SurvivalCurveExtractor:
                 save_data["error"] = error
                 print(f"Saving error: {error}")
                 
-            # Add subplot label and notes at root level
-            if self.subplot_label:
-                save_data["subplot_label"] = self.subplot_label
-                print(f"SAVE: Saving subplot label: '{self.subplot_label}'")
-            if self.curator_notes:
-                save_data["notes"] = self.curator_notes
-                print(f"SAVE: Saving notes (length: {len(self.curator_notes)})")
+            # Add subplot label and notes at root level (always save to handle clearing)
+            save_data["subplot_label"] = self.subplot_label
+            save_data["notes"] = self.curator_notes
+            print(f"SAVE: Saving subplot label: '{self.subplot_label}' (length: {len(self.subplot_label)})")
+            print(f"SAVE: Saving notes (length: {len(self.curator_notes)})")
             
             # Process extracted points - include ALL points (populated and set)
             for key, coord in self.selected_points.items():
@@ -2560,13 +2558,11 @@ class SurvivalCurveExtractor:
                 except ValueError:
                     save_data["raw_coordinates"][key] = coord
             
-            # Add subplot label and notes at root level (but not status/error)
-            if self.subplot_label:
-                save_data["subplot_label"] = self.subplot_label
-                print(f"SAVE_CLEAR: Saving subplot label: '{self.subplot_label}'")
-            if self.curator_notes:
-                save_data["notes"] = self.curator_notes
-                print(f"SAVE_CLEAR: Saving notes (length: {len(self.curator_notes)})")
+            # Add subplot label and notes at root level (always save to handle clearing)
+            save_data["subplot_label"] = self.subplot_label
+            save_data["notes"] = self.curator_notes
+            print(f"SAVE_CLEAR: Saving subplot label: '{self.subplot_label}' (length: {len(self.subplot_label)})")
+            print(f"SAVE_CLEAR: Saving notes (length: {len(self.curator_notes)})")
             
             # Save to JSON file (deliberately not including status or error)
             result_file = results_path / f"{base_name}.json"
@@ -2735,20 +2731,20 @@ class SurvivalCurveExtractor:
                 if "error" in data:
                     print(f"Loaded error info for {base_name}: {data['error']}")
                     
-                # Restore subplot label and notes if saved
-                if "subplot_label" in data:
-                    self.subplot_label = data["subplot_label"]
-                    if hasattr(self, 'subplot_entry'):
-                        self.subplot_entry.delete(0, tk.END)
-                        self.subplot_entry.insert(0, self.subplot_label)
-                    print(f"Loaded subplot label '{self.subplot_label}' for {base_name}")
+                # Always reset subplot label and notes first, then restore if saved
+                self.subplot_label = data.get("subplot_label", "")
+                self.curator_notes = data.get("notes", "")
+                
+                # Update UI fields
+                if hasattr(self, 'subplot_entry'):
+                    self.subplot_entry.delete(0, tk.END)
+                    self.subplot_entry.insert(0, self.subplot_label)
+                if hasattr(self, 'notes_text'):
+                    self.notes_text.delete('1.0', tk.END)
+                    self.notes_text.insert('1.0', self.curator_notes)
                     
-                if "notes" in data:
-                    self.curator_notes = data["notes"]
-                    if hasattr(self, 'notes_text'):
-                        self.notes_text.delete('1.0', tk.END)
-                        self.notes_text.insert('1.0', self.curator_notes)
-                    print(f"Loaded notes for {base_name} (length: {len(self.curator_notes)})")
+                print(f"Loaded subplot label '{self.subplot_label}' for {base_name}")
+                print(f"Loaded notes for {base_name} (length: {len(self.curator_notes)})")
                 
             # Store what was loaded for metadata method to respect
             self._loaded_from_results = loaded_data
