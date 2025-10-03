@@ -2178,7 +2178,11 @@ class SurvivalCurveExtractor:
     
     def load_metadata(self, base_name):
         """Load metadata for the current image and auto-populate groups"""
+        # Check for metadata folder (handle both correct and misspelled versions)
         metadata_path = self.dataset_path / "metadata" / f"{base_name}.json"
+        if not metadata_path.exists():
+            # Try the misspelled version "metatdata"
+            metadata_path = self.dataset_path / "metatdata" / f"{base_name}.json"
         
         # SIMPLE RULE: Check if results file exists - if yes, check each field before populating
         results_path = self.dataset_path / "results" / f"{base_name}.json"
@@ -2194,7 +2198,7 @@ class SurvivalCurveExtractor:
         
         if metadata_path.exists():
             try:
-                with open(metadata_path, 'r') as f:
+                with open(metadata_path, 'r', encoding='utf-8-sig') as f:
                     metadata = json.load(f)
                 
                 # Cache metadata
