@@ -415,7 +415,7 @@ class SurvivalCurveExtractor:
         self.prev_btn = self.create_button(nav_buttons, text="◀ Previous", command=self.prev_image, state=tk.DISABLED)
         self.prev_btn.pack(side=tk.LEFT, padx=(0, 5))
         
-        self.image_counter_label = ttk.Label(nav_buttons, text="0 of 0 ○")
+        self.image_counter_label = ttk.Label(nav_buttons, text="0 of 0 ◯")
         self.image_counter_label.pack(side=tk.LEFT, padx=(0, 5))
         
         self.next_btn = self.create_button(nav_buttons, text="Next ▶", command=self.next_image, state=tk.DISABLED)
@@ -594,6 +594,13 @@ class SurvivalCurveExtractor:
         instruction_label = ttk.Label(frame, text="Select a point in the table below, then click on the image to set its position", foreground="gold")
         instruction_label.pack(fill=tk.X, pady=5)
         
+        # Add Extra Point button
+        extra_point_frame = ttk.Frame(frame)
+        extra_point_frame.pack(fill=tk.X, pady=(0, 5))
+        self.add_extra_point_btn = self.create_button(extra_point_frame, text="Add Extra Point", 
+                                                       command=self.add_extra_point, state=tk.DISABLED)
+        self.add_extra_point_btn.pack(side=tk.LEFT)
+        ttk.Label(extra_point_frame, text="(Select a row first)", foreground="gray", font=('Arial', 9)).pack(side=tk.LEFT, padx=(5, 0))
         
         # Data points list view
         ttk.Label(frame, text="Extracted Points:").pack(fill=tk.X, pady=(10, 0))
@@ -1058,7 +1065,7 @@ class SurvivalCurveExtractor:
         real_x, real_y = self.get_real_coordinates(x, y)
         
         # Parse group and survival rate from key
-        group, survival_rate = self.selected_point_key.split('_', 1)
+        group, survival_rate = self.parse_point_key(self.selected_point_key)
         
         # Update status
         if hasattr(self, 'calibration_status'):
@@ -1149,55 +1156,6 @@ class SurvivalCurveExtractor:
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export data: {str(e)}")
             
-    # Removed - replaced by subplot label and notes functionality
-    # def view_data(self):
-        """View current data in a popup window"""
-        if not self.selected_points:
-            messagebox.showinfo("No Data", "No data points selected yet.")
-            return
-            
-        # Create data view window
-        window = tk.Toplevel(self.root)
-        window.title("Current Data")
-        window.geometry("600x400")
-        window.transient(self.root)
-        
-        # Create text widget with scrollbar
-        text_frame = ttk.Frame(window)
-        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        text_widget = tk.Text(text_frame, wrap=tk.WORD)
-        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
-        text_widget.configure(yscrollcommand=scrollbar.set)
-        
-        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Generate data display
-        output = "Current Data Points (Time values at survival rate levels):\\n\\n"
-        
-        for survival_rate in self.survival_rates:
-            output += f"Survival Rate {survival_rate}:\\n"
-            for group in self.groups:
-                key = f"{group}_{survival_rate}"
-                if key in self.selected_points:
-                    point = self.selected_points[key]
-                    # Only convert coordinates if the point has been set
-                    if point['x'] is not None and point['y'] is not None:
-                        real_x, real_y = self.get_real_coordinates(point['x'], point['y'])
-                        if real_x is not None:
-                            output += f"  {group}: Time = {real_x:.2f}\\n"
-                        else:
-                            output += f"  {group}: Error in calculation\\n"
-                    else:
-                        output += f"  {group}: Not set\\n"
-                else:
-                    output += f"  {group}: Not set\\n"
-            output += "\\n"
-            
-        text_widget.insert(tk.END, output)
-        text_widget.config(state=tk.DISABLED)
-        
     def mark_done(self):
         """Mark current image as done"""
         if not self.current_image_path:
@@ -1327,7 +1285,7 @@ class SurvivalCurveExtractor:
             self.update_progress_info()
     
     def get_image_status_indicator(self, base_name):
-        """Get status indicator (✓/✗/○) for an image"""
+        """Get status indicator (✓/✗/◯) for an image"""
         try:
             results_path = self.dataset_path / "results" / f"{base_name}.json"
             if results_path.exists():
@@ -1339,9 +1297,9 @@ class SurvivalCurveExtractor:
                         return "✓"
                     elif data["status"] == "error":
                         return "✗"
-            return "○"  # Not completed
+            return "◯"  # Not completed
         except:
-            return "○"
+            return "◯"
     
     def get_completion_stats(self):
         """Get completion statistics for the dataset"""
@@ -1420,7 +1378,7 @@ class SurvivalCurveExtractor:
             self.filtered_image_files = []
             for image_file in self.image_files:
                 status_indicator = self.get_image_status_indicator(image_file)
-                if status_indicator == "○":  # Not completed
+                if status_indicator == "◯":  # Not completed
                     self.filtered_image_files.append(image_file)
             
             # Reset current index to first incomplete image
@@ -1663,27 +1621,52 @@ class SurvivalCurveExtractor:
         # Only update if tree exists
         if not hasattr(self, 'points_tree'):
             return
-            
+        
         # Clear existing items
         for item in self.points_tree.get_children():
             self.points_tree.delete(item)
-            
-        # Add current points (including placeholders)
+        
+        # Create a sorted list of points with proper ordering
+        # Group by survival rate, then show base point followed by any extra points
+        points_by_rate = {}
+        
         for key, point in self.selected_points.items():
-            group, survival_rate = key.split('_', 1)
+            group, survival_rate = self.parse_point_key(key)
             
-            # Handle both set points and placeholder points
-            if point['x'] is not None and point['y'] is not None:
-                real_x, real_y = self.get_real_coordinates(point['x'], point['y'])
-                time_value = f"{real_x:.2f}" if real_x is not None else "N/A"
-            else:
-                time_value = "N/A"
+            # Check if group is in current groups
+            if group not in self.groups:
+                continue
             
-            self.points_tree.insert('', 'end', values=(
-                group,
-                survival_rate,
-                time_value
-            ))
+            # Determine base survival rate (remove _extra suffix if present)
+            base_rate = survival_rate.replace('_extra', '')
+            
+            if base_rate not in points_by_rate:
+                points_by_rate[base_rate] = []
+            
+            points_by_rate[base_rate].append((group, survival_rate, point))
+        
+        # Sort by survival rate order (0%, 25%, 50%, 75%, 100%)
+        survival_order = ['0%', '25%', '50%', '75%', '100%']
+        
+        for base_rate in survival_order:
+            if base_rate in points_by_rate:
+                # Sort points within this rate: first by group, then base before extra
+                sorted_points = sorted(points_by_rate[base_rate], 
+                                     key=lambda x: (x[0], '_extra' in x[1]))
+                
+                for group, survival_rate, point in sorted_points:
+                    # Handle both set points and placeholder points
+                    if point['x'] is not None and point['y'] is not None:
+                        real_x, real_y = self.get_real_coordinates(point['x'], point['y'])
+                        time_value = f"{real_x:.2f}" if real_x is not None else "N/A"
+                    else:
+                        time_value = "N/A"
+                    
+                    self.points_tree.insert('', 'end', values=(
+                        group,
+                        survival_rate,
+                        time_value
+                    ))
             
     
     def on_treeview_edit(self, event):
@@ -1782,14 +1765,119 @@ class SurvivalCurveExtractor:
                 group, survival_rate = values[0], values[1]
                 self.selected_point_key = f"{group}_{survival_rate}"
                 
+                # Enable Add Extra Point button only if this is not already an extra point
+                if hasattr(self, 'add_extra_point_btn'):
+                    if not str(survival_rate).endswith('_extra'):
+                        self.add_extra_point_btn.config(state=tk.NORMAL)
+                    else:
+                        self.add_extra_point_btn.config(state=tk.DISABLED)
+                
                 # Update status to show which point is selected for clicking
                 if hasattr(self, 'calibration_status'):
                     self.calibration_status.config(text=f"Selected: {group} - {survival_rate}. Click on image to set point.")
         else:
             self.selected_point_key = None
+            # Disable Add Extra Point button when no selection
+            if hasattr(self, 'add_extra_point_btn'):
+                self.add_extra_point_btn.config(state=tk.DISABLED)
             # Reset status when no selection
             if hasattr(self, 'calibration_status'):
                 self.calibration_status.config(text="Select a point in the table below, then click on the image to set its position")
+    
+    def add_extra_point(self):
+        """Add an extra point for the selected survival rate"""
+        selection = self.points_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a point in the table first.")
+            return
+        
+        # Get the selected row data
+        values = self.points_tree.item(selection[0])['values']
+        if len(values) < 2:
+            return
+        
+        group, survival_rate = values[0], values[1]
+        
+        # Don't allow creating extra of an extra
+        if str(survival_rate).endswith('_extra'):
+            messagebox.showwarning("Invalid Selection", "Cannot create an extra point from an already extra point.")
+            return
+        
+        # Create the extra survival rate key
+        extra_survival_rate = f"{survival_rate}_extra"
+        extra_key = f"{group}_{extra_survival_rate}"
+        
+        # Check if this extra point already exists
+        if extra_key in self.selected_points:
+            messagebox.showinfo("Already Exists", f"An extra point for {group} - {survival_rate} already exists.")
+            # Still select it if it exists
+            self.select_point_in_tree(group, extra_survival_rate)
+            return
+        
+        # Get the original point's coordinates
+        original_key = f"{group}_{survival_rate}"
+        original_point = self.selected_points.get(original_key)
+        
+        if original_point:
+            # Create a copy of the original point (including its y-coordinate for survival rate)
+            new_point = {
+                'x': None,  # User needs to click to set the X coordinate
+                'y': original_point['y']  # Copy the Y coordinate (survival rate level)
+            }
+            self.selected_points[extra_key] = new_point
+        else:
+            # If original doesn't exist, create placeholder
+            new_point = {'x': None, 'y': None}
+            self.selected_points[extra_key] = new_point
+        
+        # Mark that user has modified data
+        self.user_modified_data = True
+        
+        # Update the tree view first
+        self.update_points_tree()
+        
+        # Refresh the canvas display
+        if self.original_image:
+            self.display_image_on_canvas()
+        
+        # Auto-select the newly created point in the tree
+        self.select_point_in_tree(group, extra_survival_rate)
+        
+        # Auto-save the new point immediately
+        self.auto_save_current_state()
+        
+        # Update status
+        if hasattr(self, 'calibration_status'):
+            self.calibration_status.config(text=f"Extra point added: {group} - {extra_survival_rate}. Click on image to set position.")
+    
+    def select_point_in_tree(self, group, survival_rate):
+        """Select a specific point in the tree view by group and survival rate"""
+        # Find the item in the tree that matches
+        for item in self.points_tree.get_children():
+            values = self.points_tree.item(item)['values']
+            if len(values) >= 2 and values[0] == group and values[1] == survival_rate:
+                # Select and focus this item
+                self.points_tree.selection_set(item)
+                self.points_tree.focus(item)
+                self.points_tree.see(item)  # Scroll to make it visible
+                
+                # Manually trigger the selection handler to update selected_point_key
+                self.selected_point_key = f"{group}_{survival_rate}"
+                
+                # Update the Add Extra Point button state
+                if hasattr(self, 'add_extra_point_btn'):
+                    if not str(survival_rate).endswith('_extra'):
+                        self.add_extra_point_btn.config(state=tk.NORMAL)
+                    else:
+                        self.add_extra_point_btn.config(state=tk.DISABLED)
+                
+                # Update status
+                if hasattr(self, 'calibration_status'):
+                    self.calibration_status.config(text=f"Selected: {group} - {survival_rate}. Click on image to set point.")
+                
+                return True
+        
+        return False
             
     def add_group_field(self):
         """Add a new group input field"""
@@ -2302,7 +2390,7 @@ class SurvivalCurveExtractor:
             self.prev_btn.config(state=tk.DISABLED)
             self.next_btn.config(state=tk.DISABLED)
             if hasattr(self, 'image_counter_label'):
-                self.image_counter_label.config(text="0 of 0 ○")
+                self.image_counter_label.config(text="0 of 0 ◯")
             self.current_file_label.config(text="")
             return
         
@@ -2365,6 +2453,48 @@ class SurvivalCurveExtractor:
         print(f"Auto-saving with cleared status: {current_file}")
         self.save_extraction_data_clear_status(current_file)
     
+    def parse_point_key(self, key):
+        """Parse a point key into group and survival_rate
+        
+        Handles keys like:
+        - "WT_25%" -> ("WT", "25%")
+        - "WT_25%_extra" -> ("WT", "25%_extra")
+        - "WT_mutant_25%" -> ("WT_mutant", "25%")
+        - "WT_mutant_25%_extra" -> ("WT_mutant", "25%_extra")
+        """
+        parts = key.split('_')
+        
+        # Look for survival rate patterns: 0%, 25%, 50%, 75%, 100%
+        # These are always the survival rates in our system
+        survival_rate_patterns = ['0%', '25%', '50%', '75%', '100%']
+        
+        # Find which part contains a survival rate pattern
+        survival_rate_index = -1
+        for i, part in enumerate(parts):
+            if part in survival_rate_patterns:
+                survival_rate_index = i
+                break
+        
+        if survival_rate_index >= 0:
+            # Everything before the survival rate is the group
+            group = '_'.join(parts[:survival_rate_index]) if survival_rate_index > 0 else parts[0]
+            # Everything from the survival rate onward is the survival rate (could include _extra)
+            survival_rate = '_'.join(parts[survival_rate_index:])
+            return group, survival_rate
+        
+        # Fallback: if no survival rate pattern found, use the old logic
+        # This handles edge cases or malformed keys
+        for i in range(len(parts) - 1, -1, -1):
+            if '%' in parts[i] or parts[i] == 'extra':
+                group = '_'.join(parts[:i]) if i > 0 else parts[0]
+                survival_rate = '_'.join(parts[i:])
+                return group, survival_rate
+        
+        # Last resort fallback
+        if '_' in key:
+            return key.rsplit('_', 1)
+        return key, ""
+    
     def save_extraction_data(self, base_name, status=None, error=None):
         """Save extraction data for a specific image"""
         try:
@@ -2421,128 +2551,13 @@ class SurvivalCurveExtractor:
                     "extracted_points": {},
                     "raw_coordinates": {}
                 }
-                # Preserve status and error from existing data if available
-                if existing_data:
-                    if "status" in existing_data:
-                        save_data["status"] = existing_data["status"]
-                    if "error" in existing_data:
-                        save_data["error"] = existing_data["error"]
-            
-            # Handle status and error if provided (these override any existing values)
-            if status is not None:
-                save_data["status"] = status
-                print(f"Saving status: {status}")
-            if error is not None:
-                save_data["error"] = error
-                print(f"Saving error: {error}")
-                
-            # Add subplot label and notes at root level (always save to handle clearing)
-            save_data["subplot_label"] = self.subplot_label
-            save_data["notes"] = self.curator_notes
-            print(f"SAVE: Saving subplot label: '{self.subplot_label}' (length: {len(self.subplot_label)})")
-            print(f"SAVE: Saving notes (length: {len(self.curator_notes)})")
-            
-            # Process extracted points - include ALL points (populated and set)
-            for key, coord in self.selected_points.items():
-                # Parse key (format: "group_survivalrate")
-                try:
-                    group, survival_rate = key.rsplit('_', 1)
-                    
-                    # Only include if group still exists
-                    if group in self.groups:
-                        # Always save raw coordinates (even populated points with X=None)
-                        save_data["raw_coordinates"][key] = coord
-                        
-                        # Initialize extracted_points structure for this survival rate
-                        if survival_rate not in save_data["extracted_points"]:
-                            save_data["extracted_points"][survival_rate] = {}
-                        
-                        # Save time values for points with X coordinates set
-                        if coord is not None and coord.get('x') is not None:
-                            # Convert pixel coordinates to real values using the calibration being saved
-                            time_value = None
-                            saved_calibration = save_data["metadata"]["calibration"]
-                            if self.is_calibration_data_complete(saved_calibration):
-                                time_value = self.pixel_to_real_x_with_calibration(coord['x'], saved_calibration)
-                                print(f"SAVE: Using saved calibration for {base_name} - pixel {coord['x']} -> time {time_value}")
-                            else:
-                                print(f"SAVE: No valid calibration for {base_name} - saving time as None")
-                            
-                            save_data["extracted_points"][survival_rate][group] = time_value
-                        else:
-                            # For populated points without X coordinate, save as null
-                            save_data["extracted_points"][survival_rate][group] = None
-                    
-                except ValueError:
-                    # Handle malformed keys - save anyway for compatibility
-                    save_data["raw_coordinates"][key] = coord
-            
-            # Save to JSON file
-            result_file = results_path / f"{base_name}.json"
-            with open(result_file, 'w') as f:
-                json.dump(save_data, f, indent=2, default=str)
-                
-        except Exception as e:
-            print(f"Auto-save failed for {base_name}: {e}")
-    
-    def save_extraction_data_clear_status(self, base_name):
-        """Save extraction data and explicitly clear status/error fields"""
-        try:
-            # Create results directory if it doesn't exist
-            results_path = self.dataset_path / "results"
-            results_path.mkdir(exist_ok=True)
-            
-            # Load existing data to preserve ALL existing information (NEVER overwrite with metadata)
-            result_file = results_path / f"{base_name}.json"
-            existing_data = {}
-            
-            if result_file.exists():
-                try:
-                    with open(result_file, 'r') as f:
-                        existing_data = json.load(f)
-                    print(f"SAVE_CLEAR: Found existing results file for {base_name} - preserving existing data")
-                except Exception as e:
-                    print(f"Could not load existing data: {e}")
-                    existing_data = {}
-            
-            # Prepare data to save 
-            # RULE: Only preserve existing metadata if user hasn't made changes (prevents metadata overwrite)
-            # If user made changes, always save current state
-            if existing_data and not self.user_modified_data:
-                print(f"SAVE_CLEAR: No user changes detected - preserving existing metadata for {base_name}")
-                save_data = existing_data.copy()  # Start with existing data
-                # Only update extraction_date and remove status/error
-                if "metadata" not in save_data:
-                    save_data["metadata"] = {}
-                save_data["metadata"]["extraction_date"] = self.get_current_timestamp()
-                save_data["metadata"]["image_file"] = f"{base_name}.png"
-                # Remove status and error fields as intended
-                save_data.pop("status", None)
-                save_data.pop("error", None)
-            else:
-                if existing_data and self.user_modified_data:
-                    print(f"SAVE_CLEAR: User made changes - updating all data for {base_name}")
-                else:
-                    print(f"SAVE_CLEAR: Creating new metadata structure for {base_name}")
-                save_data = {
-                    "metadata": {
-                        "image_file": f"{base_name}.png",
-                        "extraction_date": self.get_current_timestamp(),
-                        "x_axis_type": self.x_axis_type,
-                        "y_axis_type": self.y_axis_type,
-                        "x_axis_units": self.x_axis_units,
-                        "y_axis_units": self.y_axis_units,
-                        "calibration": self.axis_calibration.copy(),
-                        "groups": self.groups.copy()
-                    },
-                    "extracted_points": {},
-                    "raw_coordinates": {}
-                }
             
             # Process extracted points - same as regular save
             for key, coord in self.selected_points.items():
+                # Parse key (format: "group_survivalrate" or "group_survivalrate_extra")
                 try:
-                    group, survival_rate = key.rsplit('_', 1)
+                    group, survival_rate = self.parse_point_key(key)
+                    
                     if group in self.groups:
                         save_data["raw_coordinates"][key] = coord
                         if survival_rate not in save_data["extracted_points"]:
@@ -2559,7 +2574,8 @@ class SurvivalCurveExtractor:
                             save_data["extracted_points"][survival_rate][group] = time_value
                         else:
                             save_data["extracted_points"][survival_rate][group] = None
-                except ValueError:
+                except (ValueError, IndexError) as e:
+                    print(f"Warning: Could not parse key '{key}': {e}")
                     save_data["raw_coordinates"][key] = coord
             
             # Add subplot label and notes at root level (always save to handle clearing)
@@ -2584,20 +2600,19 @@ class SurvivalCurveExtractor:
         current_group_names = set(self.groups)
         
         for key in list(self.selected_points.keys()):
-            if '_' in key:
-                try:
-                    group, survival_rate = key.rsplit('_', 1)
-                    # If the group is no longer in the current groups list, mark for removal
-                    if group not in current_group_names:
-                        keys_to_remove.append(key)
-                except ValueError:
-                    continue
+            try:
+                group, survival_rate = self.parse_point_key(key)
+                # If the group is no longer in the current groups list, mark for removal
+                if group not in current_group_names:
+                    keys_to_remove.append(key)
+            except (ValueError, IndexError):
+                continue
         
         # Remove the obsolete keys
         if keys_to_remove:
             removed_groups = set()
             for key in keys_to_remove:
-                group, _ = key.rsplit('_', 1)
+                group, _ = self.parse_point_key(key)
                 removed_groups.add(group)
                 del self.selected_points[key]
             
@@ -2627,16 +2642,15 @@ class SurvivalCurveExtractor:
         # Update keys in selected_points
         points_to_update = {}
         for old_key, coord in list(self.selected_points.items()):
-            if '_' in old_key:
-                try:
-                    group, survival_rate = old_key.rsplit('_', 1)
-                    if group in group_mapping:
-                        new_group = group_mapping[group]
-                        new_key = f"{new_group}_{survival_rate}"
-                        points_to_update[new_key] = coord
-                        del self.selected_points[old_key]
-                except ValueError:
-                    continue
+            try:
+                group, survival_rate = self.parse_point_key(old_key)
+                if group in group_mapping:
+                    new_group = group_mapping[group]
+                    new_key = f"{new_group}_{survival_rate}"
+                    points_to_update[new_key] = coord
+                    del self.selected_points[old_key]
+            except (ValueError, IndexError):
+                continue
         
         # Add the updated points
         self.selected_points.update(points_to_update)
