@@ -386,7 +386,10 @@ class SurvivalCurveExtractor:
         self.create_button(dataset_frame, text="Select Dataset Folder", command=self.select_dataset).pack(side=tk.LEFT, padx=(0, 10))
         
         self.dataset_label = ttk.Label(dataset_frame, text="No dataset selected", foreground="#999999")
-        self.dataset_label.pack(side=tk.LEFT, padx=(0, 20))
+        self.dataset_label.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Undone All Tasks checkbox
+        self.create_button(dataset_frame, text="Undone All Tasks", command=self.undone_all_tasks).pack(side=tk.LEFT, padx=(0, 20))
         
         # Navigation controls
         nav_controls = ttk.Frame(nav_frame)
@@ -1157,57 +1160,78 @@ class SurvivalCurveExtractor:
             messagebox.showerror("Export Error", f"Failed to export data: {str(e)}")
             
     def mark_done(self):
-        """Mark current image as done"""
-        if not self.current_image_path:
+        """Persist status=done for the current image, then refresh UI and progress."""
+        if not getattr(self, "current_image_path", None):
             messagebox.showwarning("No Image", "Please select an image first.")
             return
-            
-        # Mark that user has modified data (status change)
+
         self.user_modified_data = True
-        print(f"MARK_DONE: User marked image as done")
-            
-        # Auto-save current state with done status
-        self.auto_save_current_state(status="done")
-        self.export_status.config(text="Image marked as DONE ✓")
-        
-        # Update navigation to show status
+        try:
+            # Persist 'done'
+            self.auto_save_current_state(status="done")
+        except Exception as e:
+            print(f"MARK_DONE: failed to save status: {e}")
+            messagebox.showwarning("Save failed", "Could not write status to the results file.")
+            return
+
+        # Update progress info
+        try:
+            self.update_progress_info()
+        except Exception as e:
+            print(f"MARK_DONE: update_progress_info failed: {e}")
+
+        # Update navigation status
+        self.update_navigation_status()
+ 
+    def clear_done_status(self):
+        """Remove status/error for the CURRENT image, then refresh UI and progress."""
+        if not getattr(self, "current_image_path", None):
+            return
+
+        base_name = Path(self.current_image_path).stem
+        try:
+            self.user_modified_data = True
+            self.save_extraction_data_clear_status(base_name)
+        except Exception as e:
+            print(f"CLEAR_STATUS: {e}")
+
+        try:
+            self.update_progress_info()
+        except Exception as e:
+            print(f"CLEAR_STATUS: update_progress_info failed: {e}")
+
+        # Update navigation status
         self.update_navigation_status()
         
-        # Update the done/undone button
-        self.update_done_undone_button()
-        
+        # Refresh the status UI for current image
+        self.refresh_status_ui()
+
     def toggle_done_status(self):
         """Toggle between done and undone status"""
         if not self.current_image_path:
             messagebox.showwarning("No Image", "Please select an image first.")
             return
             
-        # Check current status
-        current_status = self.get_current_image_status()
-        
-        if current_status == "done":
-            # Image is done, so undone it
-            self.mark_undone()
-        else:
-            # Image is not done (or has error), so mark as done
-            self.mark_done()
-    
-    def get_current_image_status(self):
-        """Get the current status of the loaded image"""
-        if not self.dataset_path or not self.image_files or self.current_index >= len(self.image_files):
-            return None
-            
-        base_name = self.image_files[self.current_index]
+        # Read current status from disk (same logic as refresh_status_ui)
+        base_name = Path(self.current_image_path).stem
+        status = None
         try:
             results_path = self.dataset_path / "results" / f"{base_name}.json"
             if results_path.exists():
-                with open(results_path, 'r') as f:
+                with open(results_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
-                return data.get("status")
+                status = data.get("status")
+                print(f"TOGGLE: Current status for {base_name} is '{status}'")
         except Exception as e:
-            print(f"Error getting status for {base_name}: {e}")
-        return None
+            print(f"TOGGLE: Error getting status for {base_name}: {e}")
         
+        if status == "done":
+            # Image is done, so undone it
+            self.clear_done_status()
+        else:
+            # Image is not done (or has error), so mark as done
+            self.mark_done()    
+            
     def mark_undone(self):
         """Remove done/error status from current image"""
         if not self.current_image_path:
@@ -1216,30 +1240,68 @@ class SurvivalCurveExtractor:
             
         # Mark that user has modified data (status change)
         self.user_modified_data = True
-        print(f"MARK_UNDONE: User marked image as undone")
             
         # Remove status by saving with empty status and error
         self.auto_save_current_state_clear_status()
-        self.export_status.config(text="Status cleared - ready to mark image")
+        
+        # Update progress immediately after marking undone
+        self.update_progress_info()
         
         # Update navigation to show status
         self.update_navigation_status()
         
-        # Update the done/undone button
-        self.update_done_undone_button()
-        
-    def update_done_undone_button(self):
-        """Update the done/undone button text based on current status"""
-        if not hasattr(self, 'done_undone_btn'):
+        # Refresh the status UI for current image (REPLACES update_done_undone_button)
+        self.refresh_status_ui()  
+
+    def refresh_status_ui(self):
+        """
+        Recompute the UI for the CURRENT image:
+        - If status == 'done': show 'Undone' button and DONE text
+        - Else: show 'Done' button and 'Ready...' text
+        Call this after opening an image and after any status-changing action.
+        """
+        # No image selected
+        if not getattr(self, "current_image_path", None):
+            # Keep it safe if widgets not yet built
+            if hasattr(self, "export_status"):
+                self.export_status.config(text="")
+            if hasattr(self, "done_undone_btn"):
+                self.done_undone_btn.config(text="Done", state="disabled")
             return
+
+        # Read current status from disk for THIS specific image
+        status = None
+        try:
+            # Get the base name from current path
+            base_name = Path(self.current_image_path).stem
+            results_path = self.dataset_path / "results" / f"{base_name}.json"
             
-        current_status = self.get_current_image_status()
-        
-        if current_status == "done":
-            self.done_undone_btn.config(text="Undone")
-        else:
-            self.done_undone_btn.config(text="Done")
-        
+            if results_path.exists():
+                with open(results_path, 'r', encoding='utf-8-sig') as f:
+                    data = json.load(f)
+                    status = data.get("status")
+                    print(f"REFRESH_UI: Read status '{status}' for {base_name}")
+            else:
+                print(f"REFRESH_UI: No results file for {base_name}")
+        except Exception as e:
+            print(f"REFRESH_UI: could not read status for {self.current_image_path}: {e}")
+
+        # Update the banner text
+        if hasattr(self, "export_status"):
+            if status == "done":
+                self.export_status.config(text="Image marked as DONE ✓")
+            else:
+                self.export_status.config(text="Ready to mark image as complete")
+
+        # Update the toggle button
+        if hasattr(self, "done_undone_btn"):
+            if status == "done":
+                # Show "Undone" which clears status
+                self.done_undone_btn.config(text="Undone", state="normal")
+            else:
+                # Show "Done" which marks as done
+                self.done_undone_btn.config(text="Done", state="normal")
+
     def report_error(self):
         """Report an error for current image"""
         if not self.current_image_path:
@@ -1254,17 +1316,23 @@ class SurvivalCurveExtractor:
         )
         
         if error_text:  # Only proceed if user entered text and didn't cancel
+            # Mark that user has modified data (status change)
+            self.user_modified_data = True
+            
             # Auto-save current state with error status
             self.auto_save_current_state(status="error", error=error_text.strip())
-            self.export_status.config(text="Error reported ✗")
+            
             messagebox.showinfo("Error Reported", "Error has been recorded for this image!")
+            
+            # Update progress immediately after reporting error
+            self.update_progress_info()
             
             # Update navigation to show status
             self.update_navigation_status()
             
-            # Update the done/undone button
-            self.update_done_undone_button()
-    
+            # Refresh the status UI for current image (REPLACES update_done_undone_button)
+            self.refresh_status_ui() 
+   
     def update_navigation_status(self):
         """Update navigation display with status indicators"""
         if not hasattr(self, 'image_counter_label') or not self.dataset_path:
@@ -1289,7 +1357,7 @@ class SurvivalCurveExtractor:
         try:
             results_path = self.dataset_path / "results" / f"{base_name}.json"
             if results_path.exists():
-                with open(results_path, 'r') as f:
+                with open(results_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                 
                 if "status" in data:
@@ -1303,27 +1371,48 @@ class SurvivalCurveExtractor:
     
     def get_completion_stats(self):
         """Get completion statistics for the dataset"""
-        if not self.dataset_path or not self.image_files:
+        if not self.dataset_path:
             return 0, 0, 0
-            
+        
+        # Total count is based on metadata files (the source of truth)
+        metadata_path = self.dataset_path / "metadata"
+        if not metadata_path.exists():
+            # Try misspelled version
+            metadata_path = self.dataset_path / "metatdata"
+        
+        if not metadata_path.exists():
+            return 0, 0, 0
+        
+        # Count total metadata files
+        metadata_files = list(metadata_path.glob("*.json"))
+        total_count = len(metadata_files)
+        
+        if total_count == 0:
+            return 0, 0, 0
+        
         done_count = 0
         error_count = 0
-        total_count = len(self.image_files)
         
-        for image_file in self.image_files:
-            try:
-                results_path = self.dataset_path / "results" / f"{image_file}.json"
-                if results_path.exists():
-                    with open(results_path, 'r') as f:
-                        data = json.load(f)
-                    
-                    if "status" in data:
-                        if data["status"] == "done":
-                            done_count += 1
-                        elif data["status"] == "error":
-                            error_count += 1
-            except:
-                continue
+        # Check results folder for completion status
+        results_path = self.dataset_path / "results"
+        if results_path.exists():
+            for metadata_file in metadata_files:
+                base_name = metadata_file.stem
+                result_file = results_path / f"{base_name}.json"
+                
+                if result_file.exists():
+                    try:
+                        with open(result_file, 'r', encoding='utf-8-sig') as f:
+                            data = json.load(f)
+                        
+                        if "status" in data:
+                            if data["status"] == "done":
+                                done_count += 1
+                            elif data["status"] == "error":
+                                error_count += 1
+                    except Exception as e:
+                        print(f"Error reading status from {result_file}: {e}")
+                        continue
                 
         return done_count, error_count, total_count
     
@@ -1362,10 +1451,15 @@ class SurvivalCurveExtractor:
             return
             
         done_count, error_count, total_count = self.get_completion_stats()
-        completed_count = done_count + error_count
-        percentage = int((completed_count / total_count) * 100) if total_count > 0 else 0
         
-        progress_text = f"Progress: {completed_count}/{total_count} ({percentage}%)"
+        if total_count == 0:
+            self.progress_label.config(text="Progress: 0/0 (0%)")
+            return
+        
+        # Progress is based on done tasks only (not including errors)
+        percentage = int((done_count / total_count) * 100) if total_count > 0 else 0
+        
+        progress_text = f"Progress: {done_count}/{total_count} ({percentage}%)"
         self.progress_label.config(text=progress_text)
     
     def apply_incomplete_filter(self):
@@ -2166,9 +2260,71 @@ class SurvivalCurveExtractor:
         self.dataset_label.config(text=f"{len(self.image_files)} images loaded")
         self.update_navigation_state()
         
+        # Calculate and display initial progress
+        self.update_progress_info()
+        
         # Load first image if available
         if self.image_files:
             self.load_image_by_index(0)
+    
+    def undone_all_tasks(self):
+        """Clear 'done' status from all result files"""
+        if not self.dataset_path:
+            messagebox.showwarning("No Dataset", "Please select a dataset first.")
+            return
+        
+        # Confirm action
+        if not messagebox.askyesno("Undone All Tasks", 
+                                "This will clear the 'done' status from ALL images in the dataset.\n\n"
+                                "Are you sure you want to continue?"):
+            return
+        
+        results_path = self.dataset_path / "results"
+        if not results_path.exists():
+            messagebox.showinfo("No Results", "No results folder found.")
+            return
+        
+        # Count how many files we'll process
+        result_files = list(results_path.glob("*.json"))
+        cleared_count = 0
+        error_count = 0
+        
+        for result_file in result_files:
+            try:
+                # Load existing data
+                with open(result_file, 'r', encoding='utf-8-sig') as f:
+                    data = json.load(f)
+                
+                # Remove status and error fields
+                if "status" in data or "error" in data:
+                    data.pop("status", None)
+                    data.pop("error", None)
+                    
+                    # Save back
+                    with open(result_file, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2, default=str)
+                    
+                    cleared_count += 1
+                    
+            except Exception as e:
+                print(f"Error processing {result_file}: {e}")
+                error_count += 1
+        
+        # Update progress display
+        self.update_progress_info()
+        
+        # Update navigation status
+        self.update_navigation_status()
+        
+        # Refresh status UI for current image
+        self.refresh_status_ui()
+        
+        # Show summary
+        message = f"Cleared status from {cleared_count} file(s)."
+        if error_count > 0:
+            message += f"\n{error_count} file(s) had errors."
+        
+        messagebox.showinfo("Tasks Undone", message)
     
     def load_image_by_index(self, index, use_filtered=None, preserve_calibration=False):
         """Load image and metadata by index"""
@@ -2215,8 +2371,9 @@ class SurvivalCurveExtractor:
                 # Update navigation UI
                 self.update_navigation_state()
                 
-                # Update the done/undone button based on loaded image status
-                self.update_done_undone_button()
+                # CRITICAL FIX: Refresh status UI for the newly loaded image
+                self.refresh_status_ui()
+                
         finally:
             # Always clear loading flag when done
             self.loading_in_progress = False
@@ -2231,8 +2388,8 @@ class SurvivalCurveExtractor:
             
             # Track last loaded image
             if base_name:
-                self._last_loaded_image = base_name
-    
+                self._last_loaded_image = base_name    
+
     def reset_for_new_image(self):
         """Reset state when loading a new image"""
         # Reset calibration
@@ -2455,6 +2612,30 @@ class SurvivalCurveExtractor:
         print(f"Auto-saving with cleared status: {current_file}")
         self.save_extraction_data_clear_status(current_file)
     
+    def save_extraction_data_clear_status(self, base_name):
+        """Save current data and remove status/error fields from the results file."""
+        try:
+            results_path = self.dataset_path / "results"
+            results_path.mkdir(exist_ok=True)
+            result_file = results_path / f"{base_name}.json"
+
+            # First, save the latest points/metadata
+            self.save_extraction_data(base_name)
+
+            # Then remove status/error
+            data = {}
+            if result_file.exists():
+                with open(result_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            data.pop("status", None)
+            data.pop("error", None)
+            with open(result_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, default=str)
+
+            print(f"CLEAR: Removed status/error for {base_name}")
+        except Exception as e:
+            print(f"CLEAR: Failed to clear status for {base_name}: {e}")
+
     def parse_point_key(self, key):
         """Parse a point key into group and survival_rate
         
@@ -2504,104 +2685,86 @@ class SurvivalCurveExtractor:
         return key, ""
     
     def save_extraction_data(self, base_name, status=None, error=None):
-        """Save extraction data for a specific image"""
+        """Save extraction data for a specific image.
+
+        If `status` or `error` are provided, write them to the results file.
+        Otherwise, preserve any existing status/error fields.
+        """
         try:
-            # Create results directory if it doesn't exist
             results_path = self.dataset_path / "results"
             results_path.mkdir(exist_ok=True)
-            
-            # Load existing data to preserve ALL existing information (NEVER overwrite with metadata)
+
             result_file = results_path / f"{base_name}.json"
             existing_data = {}
-            
             if result_file.exists():
                 try:
-                    with open(result_file, 'r') as f:
+                    with open(result_file, 'r', encoding='utf-8-sig') as f:
                         existing_data = json.load(f)
                     print(f"SAVE: Found existing results file for {base_name} - preserving existing data")
                 except Exception as e:
-                    print(f"Could not load existing data: {e}")
-                    existing_data = {}
-            
-            # Note: We preserve all user-created points, even if groups change
-            
-            # Prepare data to save 
-            # RULE: Only preserve existing metadata if user hasn't made changes (prevents metadata overwrite)
-            # If user made changes, always save current state
-            if existing_data and not self.user_modified_data:
-                print(f"SAVE: No user changes detected - preserving existing metadata for {base_name}")
-                print(f"SAVE: Current units in memory: x={self.x_axis_units}, y={self.y_axis_units}")
-                print(f"SAVE: Existing units in file: x={existing_data.get('metadata', {}).get('x_axis_units')}, y={existing_data.get('metadata', {}).get('y_axis_units')}")
-                save_data = existing_data.copy()  # Start with existing data
-                # Only update extraction_date and timestamp
-                if "metadata" not in save_data:
-                    save_data["metadata"] = {}
-                save_data["metadata"]["extraction_date"] = self.get_current_timestamp()
-                save_data["metadata"]["image_file"] = f"{base_name}.png"
-            else:
-                if existing_data and self.user_modified_data:
-                    print(f"SAVE: User made changes - updating all data for {base_name}")
-                    print(f"SAVE: Saving current units: x={self.x_axis_units}, y={self.y_axis_units}")
-                else:
-                    print(f"SAVE: Creating new metadata structure for {base_name}")
-                    print(f"SAVE: Saving current units: x={self.x_axis_units}, y={self.y_axis_units}")
-                save_data = {
-                    "metadata": {
-                        "image_file": f"{base_name}.png",
-                        "extraction_date": self.get_current_timestamp(),
-                        "x_axis_type": self.x_axis_type,
-                        "y_axis_type": self.y_axis_type,
-                        "x_axis_units": self.x_axis_units,
-                        "y_axis_units": self.y_axis_units,
-                        "calibration": self.axis_calibration.copy(),
-                        "groups": self.groups.copy()
-                    },
-                    "extracted_points": {},
-                    "raw_coordinates": {}
-                }
-            
-            # Process extracted points - same as regular save
+                    print(f"SAVE: Could not load existing data for {base_name}: {e}")
+
+            # Start with existing data and update/ensure top-level keys
+            save_data = existing_data.copy() if isinstance(existing_data, dict) else {}
+
+            # ---- metadata ----
+            md = save_data.get("metadata", {})
+            md["image_file"] = f"{base_name}.png"
+            md["extraction_date"] = self.get_current_timestamp()
+            md.setdefault("x_axis_type", self.x_axis_type)
+            md.setdefault("y_axis_type", self.y_axis_type)
+            md.setdefault("x_axis_units", self.x_axis_units)
+            md.setdefault("y_axis_units", self.y_axis_units)
+            md.setdefault("calibration", self.axis_calibration.copy())
+            md.setdefault("groups", self.groups.copy())
+            save_data["metadata"] = md
+
+            # ---- points ----
+            save_data.setdefault("extracted_points", {})
+            save_data.setdefault("raw_coordinates", {})
+            save_data["extracted_points"] = {}
+
             for key, coord in self.selected_points.items():
-                # Parse key (format: "group_survivalrate" or "group_survivalrate_extra")
                 try:
                     group, survival_rate = self.parse_point_key(key)
-                    
                     if group in self.groups:
-                        save_data["raw_coordinates"][key] = coord
-                        if survival_rate not in save_data["extracted_points"]:
-                            save_data["extracted_points"][survival_rate] = {}
-                        
-                        if coord is not None and coord.get('x') is not None:
-                            time_value = None
-                            saved_calibration = save_data["metadata"]["calibration"]
-                            if self.is_calibration_data_complete(saved_calibration):
-                                time_value = self.pixel_to_real_x_with_calibration(coord['x'], saved_calibration)
-                                print(f"SAVE_CLEAR: Using saved calibration for {base_name} - pixel {coord['x']} -> time {time_value}")
-                            else:
-                                print(f"SAVE_CLEAR: No valid calibration for {base_name} - saving time as None")
+                        save_data["extracted_points"].setdefault(survival_rate, {})
+                        if self.is_calibrated() and coord is not None:
+                            x_pixel = coord[0]
+                            time_value = self.pixel_to_time(x_pixel) if self.x_axis_type == 'time' else None
                             save_data["extracted_points"][survival_rate][group] = time_value
                         else:
                             save_data["extracted_points"][survival_rate][group] = None
-                except (ValueError, IndexError) as e:
-                    print(f"Warning: Could not parse key '{key}': {e}")
+                    else:
+                        # Group removed; keep raw coordinate so nothing is lost
+                        save_data["raw_coordinates"][key] = coord
+                except Exception as e:
+                    print(f"SAVE: Could not parse key '{key}': {e}")
                     save_data["raw_coordinates"][key] = coord
-            
-            # Add subplot label and notes at root level (always save to handle clearing)
+
+            # ---- freeform fields ----
             save_data["subplot_label"] = self.subplot_label
             save_data["notes"] = self.curator_notes
-            print(f"SAVE_CLEAR: Saving subplot label: '{self.subplot_label}' (length: {len(self.subplot_label)})")
-            print(f"SAVE_CLEAR: Saving notes (length: {len(self.curator_notes)})")
-            
-            # Save to JSON file (deliberately not including status or error)
-            result_file = results_path / f"{base_name}.json"
-            with open(result_file, 'w') as f:
+
+            # ---- status & error ----
+            if status is not None:
+                save_data["status"] = status  # <-- this is the key line that was missing
+            elif "status" in save_data:
+                pass  # preserve existing
+
+            if error is not None:
+                save_data["error"] = error
+            elif "error" in save_data:
+                pass  # preserve existing
+
+            with open(result_file, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, indent=2, default=str)
-            
-            print(f"Status/error cleared for {base_name}")
-                
+
+            print(f"SAVE: Wrote results for {base_name} (status={save_data.get('status')}, error={'present' if 'error' in save_data else 'none'})")
+
         except Exception as e:
-            print(f"Clear status failed for {base_name}: {e}")
-    
+            print(f"SAVE: Failed for {base_name}: {e}")
+
     def cleanup_removed_groups(self):
         """Remove data points for groups that no longer exist"""
         keys_to_remove = []
@@ -2967,4 +3130,3 @@ class SurvivalCurveExtractor:
 if __name__ == "__main__":
     app = SurvivalCurveExtractor()
     app.run()
-    
