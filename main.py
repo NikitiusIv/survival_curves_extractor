@@ -2685,17 +2685,14 @@ class SurvivalCurveExtractor:
         return key, ""
     
     def save_extraction_data(self, base_name, status=None, error=None):
-        """Save extraction data for a specific image.
-
-        If `status` or `error` are provided, write them to the results file.
-        Otherwise, preserve any existing status/error fields.
-        """
+        """Save extraction data for a specific image (merge-safe; preserves points across saves)."""
         try:
             results_path = self.dataset_path / "results"
             results_path.mkdir(exist_ok=True)
 
             result_file = results_path / f"{base_name}.json"
             existing_data = {}
+
             if result_file.exists():
                 try:
                     with open(result_file, 'r', encoding='utf-8-sig') as f:
@@ -2703,64 +2700,113 @@ class SurvivalCurveExtractor:
                     print(f"SAVE: Found existing results file for {base_name} - preserving existing data")
                 except Exception as e:
                     print(f"SAVE: Could not load existing data for {base_name}: {e}")
+                    existing_data = {}
 
-            # Start with existing data and update/ensure top-level keys
+            # Start by copying existing data
             save_data = existing_data.copy() if isinstance(existing_data, dict) else {}
 
             # ---- metadata ----
             md = save_data.get("metadata", {})
             md["image_file"] = f"{base_name}.png"
             md["extraction_date"] = self.get_current_timestamp()
-            md.setdefault("x_axis_type", self.x_axis_type)
-            md.setdefault("y_axis_type", self.y_axis_type)
-            md.setdefault("x_axis_units", self.x_axis_units)
-            md.setdefault("y_axis_units", self.y_axis_units)
-            md.setdefault("calibration", self.axis_calibration.copy())
-            md.setdefault("groups", self.groups.copy())
+
+            # If user changed anything in this session or file was new, refresh axis info
+            if self.user_modified_data or not existing_data:
+                md["x_axis_type"] = self.x_axis_type
+                md["y_axis_type"] = self.y_axis_type
+                md["x_axis_units"] = self.x_axis_units
+                md["y_axis_units"] = self.y_axis_units
+                md["calibration"] = self.axis_calibration.copy()
+                md["groups"] = self.groups.copy()
+            else:
+                # still ensure keys exist
+                md.setdefault("x_axis_type", self.x_axis_type)
+                md.setdefault("y_axis_type", self.y_axis_type)
+                md.setdefault("x_axis_units", self.x_axis_units)
+                md.setdefault("y_axis_units", self.y_axis_units)
+                md.setdefault("calibration", self.axis_calibration.copy())
+                md.setdefault("groups", self.groups.copy())
+
             save_data["metadata"] = md
 
-            # ---- points ----
-            save_data.setdefault("extracted_points", {})
-            save_data.setdefault("raw_coordinates", {})
-            save_data["extracted_points"] = {}
+            # ---- points (MERGE) ----
+            extracted_points = save_data.get("extracted_points", {})
+            if not isinstance(extracted_points, dict):
+                extracted_points = {}
 
-            for key, coord in self.selected_points.items():
+            raw_coordinates = save_data.get("raw_coordinates", {})
+            if not isinstance(raw_coordinates, dict):
+                raw_coordinates = {}
+
+            # Helper to check calibration completeness without crashing
+            def _cal_ready(cal):
+                try:
+                    # If you have your own completeness check, use it. This is a safe fallback:
+                    return all(k in cal for k in ("x_min", "x_max")) and cal["x_min"] is not None and cal["x_max"] is not None and cal["x_max"] != cal["x_min"]
+                except Exception:
+                    return False
+
+            cal = md.get("calibration", {})
+            cal_ok = _cal_ready(cal)
+
+            # Update only the points we currently know about; leave everything else intact
+            for key, coord in (self.selected_points or {}).items():
                 try:
                     group, survival_rate = self.parse_point_key(key)
-                    if group in self.groups:
-                        save_data["extracted_points"].setdefault(survival_rate, {})
-                        if self.is_calibrated() and coord is not None:
-                            x_pixel = coord[0]
-                            time_value = self.pixel_to_time(x_pixel) if self.x_axis_type == 'time' else None
-                            save_data["extracted_points"][survival_rate][group] = time_value
-                        else:
-                            save_data["extracted_points"][survival_rate][group] = None
-                    else:
-                        # Group removed; keep raw coordinate so nothing is lost
-                        save_data["raw_coordinates"][key] = coord
+
+                    # Ensure nested maps exist
+                    if survival_rate not in extracted_points or not isinstance(extracted_points.get(survival_rate), dict):
+                        extracted_points[survival_rate] = {}
+
+                    # Always preserve raw pixel coordinate so nothing is lost on calibration edits
+                    raw_coordinates[key] = coord
+
+                    # Compute calibrated x if possible; else store None (but keep raw)
+                    time_value = None
+                    if cal_ok and coord is not None:
+                        # You may have your own calibrator; pick the most accurate available
+                        if hasattr(self, "pixel_to_real_x_with_calibration"):
+                            px = coord["x"] if isinstance(coord, dict) else coord[0]
+                            time_value = self.pixel_to_real_x_with_calibration(px, cal)
+                        elif hasattr(self, "pixel_to_time"):
+                            px = coord["x"] if isinstance(coord, dict) else coord[0]
+                            time_value = self.pixel_to_time(px)
+                        # else: leave as None
+
+                    extracted_points[survival_rate][group] = time_value
+
                 except Exception as e:
-                    print(f"SAVE: Could not parse key '{key}': {e}")
-                    save_data["raw_coordinates"][key] = coord
+                    print(f"SAVE: Could not handle point '{key}': {e}")
+                    # still keep raw so we don't lose the click
+                    raw_coordinates[key] = coord
+
+            # Write merged structures back
+            save_data["extracted_points"] = extracted_points
+            save_data["raw_coordinates"] = raw_coordinates
 
             # ---- freeform fields ----
             save_data["subplot_label"] = self.subplot_label
             save_data["notes"] = self.curator_notes
 
-            # ---- status & error ----
+            # ---- status & error (preserve unless explicitly changed) ----
             if status is not None:
-                save_data["status"] = status  # <-- this is the key line that was missing
-            elif "status" in save_data:
-                pass  # preserve existing
+                save_data["status"] = status
+            elif "status" in existing_data:
+                save_data["status"] = existing_data["status"]
+            else:
+                save_data.pop("status", None)
 
             if error is not None:
                 save_data["error"] = error
-            elif "error" in save_data:
-                pass  # preserve existing
+            elif "error" in existing_data:
+                save_data["error"] = existing_data["error"]
+            else:
+                save_data.pop("error", None)
 
             with open(result_file, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, indent=2, default=str)
 
-            print(f"SAVE: Wrote results for {base_name} (status={save_data.get('status')}, error={'present' if 'error' in save_data else 'none'})")
+            print(f"SAVE: Wrote {base_name} (status={save_data.get('status')}, error={'present' if 'error' in save_data else 'none'})")
 
         except Exception as e:
             print(f"SAVE: Failed for {base_name}: {e}")
