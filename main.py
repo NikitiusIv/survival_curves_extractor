@@ -2278,7 +2278,8 @@ class SurvivalCurveExtractor:
         
         if results_path.exists():
             try:
-                with open(results_path, 'r') as f:
+                # Use utf-8-sig to handle files with BOM
+                with open(results_path, 'r', encoding='utf-8-sig') as f:
                     results_data = json.load(f)
                 print(f"Results file exists for {base_name} - checking fields before metadata population")
             except Exception as e:
@@ -2286,6 +2287,7 @@ class SurvivalCurveExtractor:
         
         if metadata_path.exists():
             try:
+                # Use utf-8-sig to handle files with BOM
                 with open(metadata_path, 'r', encoding='utf-8-sig') as f:
                     metadata = json.load(f)
                 
@@ -2461,6 +2463,7 @@ class SurvivalCurveExtractor:
         - "WT_25%_extra" -> ("WT", "25%_extra")
         - "WT_mutant_25%" -> ("WT_mutant", "25%")
         - "WT_mutant_25%_extra" -> ("WT_mutant", "25%_extra")
+        - "Female, 0% tragacanth gum_50%" -> ("Female, 0% tragacanth gum", "50%")
         """
         parts = key.split('_')
         
@@ -2468,12 +2471,17 @@ class SurvivalCurveExtractor:
         # These are always the survival rates in our system
         survival_rate_patterns = ['0%', '25%', '50%', '75%', '100%']
         
-        # Find which part contains a survival rate pattern
+        # Find the LAST occurrence of a survival rate pattern
+        # This handles cases where group names contain percentages like "0% tragacanth"
         survival_rate_index = -1
-        for i, part in enumerate(parts):
-            if part in survival_rate_patterns:
-                survival_rate_index = i
-                break
+        for i in range(len(parts) - 1, -1, -1):
+            if parts[i] in survival_rate_patterns:
+                # Check if this could be the actual survival rate:
+                # Either it's the last part, or followed only by 'extra'
+                remaining_parts = parts[i+1:]
+                if not remaining_parts or (len(remaining_parts) == 1 and remaining_parts[0] == 'extra'):
+                    survival_rate_index = i
+                    break
         
         if survival_rate_index >= 0:
             # Everything before the survival rate is the group
@@ -2482,10 +2490,10 @@ class SurvivalCurveExtractor:
             survival_rate = '_'.join(parts[survival_rate_index:])
             return group, survival_rate
         
-        # Fallback: if no survival rate pattern found, use the old logic
-        # This handles edge cases or malformed keys
+        # Fallback: if no survival rate pattern found at valid position
+        # Look for any part with % (but not 'extra' alone)
         for i in range(len(parts) - 1, -1, -1):
-            if '%' in parts[i] or parts[i] == 'extra':
+            if '%' in parts[i]:
                 group = '_'.join(parts[:i]) if i > 0 else parts[0]
                 survival_rate = '_'.join(parts[i:])
                 return group, survival_rate
@@ -2670,7 +2678,8 @@ class SurvivalCurveExtractor:
             results_path = self.dataset_path / "results" / f"{base_name}.json"
             
             if results_path.exists():
-                with open(results_path, 'r') as f:
+                # Use utf-8-sig to handle files with BOM
+                with open(results_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                 
                 # Restore groups if saved (priority over metadata)
@@ -2958,3 +2967,4 @@ class SurvivalCurveExtractor:
 if __name__ == "__main__":
     app = SurvivalCurveExtractor()
     app.run()
+    
