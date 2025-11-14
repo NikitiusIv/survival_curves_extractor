@@ -2625,7 +2625,7 @@ class SurvivalCurveExtractor:
             # Then remove status/error
             data = {}
             if result_file.exists():
-                with open(result_file, 'r', encoding='utf-8') as f:
+                with open(result_file, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
             data.pop("status", None)
             data.pop("error", None)
